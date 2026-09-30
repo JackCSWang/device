@@ -174,10 +174,13 @@ void CaptureSession::openDevice(const ScopeDevice& device) {
     m_openDeviceId = device.id;
     m_everOpenedADevice = true;
     m_sawFrame = false;
-    if (m_rememberedId != device.id) {
-        m_rememberedId = device.id;
-        emit rememberedDeviceIdChanged(m_rememberedId);
-    }
+    // N1 fix, half 1: deliberately NOT writing m_rememberedId here. This
+    // used to persist on every successful open, including an auto-open of a
+    // sole device -- which is exactly how a laptop's integrated webcam, seen
+    // alone on a first launch, became a permanent sticky default that no
+    // later microscope attach could displace (openPreferredDevice()'s own
+    // "pipeline already open" guard swallowed it). Persisting a preference
+    // is reserved for an explicit choice -- see selectDevice().
 
     connect(m_controller.get(), &CaptureController::status, this,
             [this](const QString& text) { m_status->setDeviceStatus(text); });
@@ -332,4 +335,34 @@ void CaptureSession::retry() {
     m_blockedDeviceId.clear();
     m_consecutiveReopens = 0;
     openPreferredDevice();
+}
+
+void CaptureSession::changeScope() {
+    // Synchronous, unlike teardownPipeline(): this runs on a direct user
+    // action, not from inside a signal handler on the objects being
+    // destroyed, so there is nothing further up the call stack that still
+    // needs them alive.
+    if (m_controller || m_source || m_recorder) {
+        if (auto* controller = m_controller.release()) {
+            controller->disconnect(this);
+            controller->deleteLater();
+        }
+        if (auto* recorder = m_recorder.release()) {
+            recorder->disconnect(this);
+            recorder->deleteLater();
+        }
+        if (auto* source = m_source.release()) {
+            source->disconnect(this);
+            source->deleteLater();
+        }
+        m_openDeviceId.clear();
+        m_sawFrame = false;
+        emit pipelineChanged();
+        emit recordingChanged();
+    }
+
+    m_devices = m_registry->available();
+    emit deviceListChanged();
+    setNeedsChoice(true);
+    m_status->setDeviceStatus(tr("Select a scope."));
 }

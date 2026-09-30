@@ -75,6 +75,7 @@ void AppContext::toggleRecording() { m_session->toggleRecording(); }
 void AppContext::resetView() { m_transform->resetToFit(); }
 void AppContext::selectDevice(int index) { m_session->selectDevice(index); }
 void AppContext::retry() { m_session->retry(); }
+void AppContext::changeScope() { m_session->changeScope(); }
 
 void AppContext::setVideoSink(QVideoSink* sink) {
     disconnect(m_videoRelay);

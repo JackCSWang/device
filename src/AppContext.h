@@ -80,6 +80,11 @@ public:
     // User-initiated recovery after a device error. The Error recovery path
     // deliberately does not retry on its own (see CaptureSession).
     Q_INVOKABLE void retry();
+    // N1 fix: the user's own way back to the device picker, reachable
+    // whenever more than one scope is present -- not only when nothing is
+    // open. The decision and the teardown live in CaptureSession; this is a
+    // relay.
+    Q_INVOKABLE void changeScope();
     // Opens the OS's camera-privacy settings page so the technician can
     // grant access without hunting for it themselves (spec 10.3).
     Q_INVOKABLE void openCameraPrivacySettings();

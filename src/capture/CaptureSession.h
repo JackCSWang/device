@@ -93,6 +93,14 @@ public:
     // User-initiated recovery: forgets that a device errored and tries
     // again. The Error path deliberately does not retry on its own.
     void retry();
+    // N1 fix, half 2: the user's own way back to the picker. Tears down
+    // whatever pipeline is currently open (if any) and re-enters the choice
+    // state, bypassing openPreferredDevice()'s "a pipeline is already open"
+    // guard on purpose -- that guard is exactly what swallowed the scope's
+    // attach() in the field once a wrong device had auto-opened. Must be
+    // reachable whenever more than one device is present, not only when
+    // nothing is open.
+    void changeScope();
 
 signals:
     void pipelineChanged();

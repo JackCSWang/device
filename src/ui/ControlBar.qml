@@ -31,6 +31,19 @@ Pane {
 
         Item { Layout.fillWidth: true }
 
+        // N1 fix: the user's own way back to the picker. A remembered
+        // choice is only ever recorded from an explicit selectDevice(), but
+        // the technician still needs a way to revisit it -- e.g. a scope
+        // that was misidentified, or a second camera attached after the
+        // fact. Reachable whenever more than one device is present, not
+        // only when nothing is currently open.
+        Button {
+            text: qsTr("Change scope")
+            visible: AppContext.deviceNames.length > 1
+            Layout.preferredHeight: 56
+            onClicked: AppContext.changeScope()
+        }
+
         Label {
             text: qsTr("%1x").arg(AppContext.transform.zoom.toFixed(1))
             font.pixelSize: 18

@@ -424,6 +424,51 @@ private slots:
         QVERIFY(h->session->needsDeviceChoice());
     }
 
+    // N1 fix, half 1: a sole-device auto-open must not become a sticky
+    // preference. Before the fix, openDevice() persisted m_rememberedId on
+    // *every* successful open, including this one -- exactly the mechanism
+    // that stranded the field partner on the wrong camera: the laptop's
+    // integrated webcam, alone on a first launch, became the permanent
+    // default, and the microscope's later attach() was swallowed because a
+    // pipeline was already open (openPreferredDevice()'s own guard).
+    //
+    // Sensitivity: restore the `m_rememberedId = device.id` write in
+    // openDevice() and both assertions fail -- rememberedDeviceId() reads
+    // back "scope-1" and the spy fires once.
+    void aSoleDeviceAutoOpenDoesNotPersistARememberedId() {
+        auto h = makeHarness();
+        h->registry.attach(QStringLiteral("scope-1"), QStringLiteral("HD camera"));
+        QSignalSpy remembered(h->session.get(), &CaptureSession::rememberedDeviceIdChanged);
+        h->session->start();
+
+        QVERIFY(h->session->hasDevice());
+        QVERIFY(h->session->rememberedDeviceId().isEmpty());
+        QCOMPARE(remembered.count(), 0);
+    }
+
+    // N1 fix, half 2: the user's own escape hatch back to the picker.
+    // changeScope() must tear the currently-open pipeline down and re-enter
+    // the choice state even though a pipeline is open right now --
+    // openPreferredDevice()'s own "a pipeline is already open" early return
+    // is exactly what made the remembered wrong camera unreachable from the
+    // UI in the field.
+    //
+    // Sensitivity: replace changeScope()'s body with a no-op (or drop the
+    // setNeedsChoice(true) call) and this fails -- hasDevice() stays true
+    // and needsDeviceChoice() stays false.
+    void requestingThePickerWithAPipelineOpenReEntersTheChoiceState() {
+        auto h = makeHarness();
+        h->registry.attach(QStringLiteral("webcam"), QStringLiteral("Integrated Camera"));
+        h->session->start();
+        QVERIFY(h->session->hasDevice());
+        QVERIFY(!h->session->needsDeviceChoice());
+
+        h->session->changeScope();
+
+        QVERIFY(!h->session->hasDevice());
+        QVERIFY(h->session->needsDeviceChoice());
+    }
+
     // The device line must not be a write-once field: a transient error
     // followed by a healthy pipeline has to clear.
     void aTransientErrorDoesNotPersistOverAHealthyPipeline() {
