@@ -39,7 +39,12 @@ signals:
     void status(QString message);
     void snapshotSaved(QString path);
     void recordingSaved(QString path);
-    void sourceLost(QString message);
+    // `reason` is appended rather than leading so existing consumers'
+    // `message` stays argument 0. It is what lets CaptureSession apply
+    // different recovery policies to a detach and to a device error: a
+    // detach waits for a fresh attach edge, while an Error must not
+    // immediately reopen the same device id (that loop was Critical 3).
+    void sourceLost(QString message, StopReason reason);
     void firstFrameTimedOut();
     // Emitted once the format preference chain is exhausted with no frame
     // ever seen -- the watchdog tried every advertised format and gave up

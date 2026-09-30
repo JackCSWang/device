@@ -1,7 +1,7 @@
 #include "device/DeviceRegistry.h"
 #include <QMediaDevices>
 
-DeviceRegistry::DeviceRegistry(QObject* parent) : QObject(parent) {}
+DeviceRegistry::DeviceRegistry(QObject* parent) : IDeviceRegistry(parent) {}
 
 QList<ScopeDevice> DeviceRegistry::available() const {
     QList<ScopeDevice> out;

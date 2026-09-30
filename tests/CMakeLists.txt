@@ -17,6 +17,7 @@ microscope_test(test_qt_capture_source)
 microscope_test(test_format_fallback)
 microscope_test(test_failure_modes)
 microscope_test(test_camera_access_policy)
+microscope_test(test_capture_session)
 
 qt_add_executable(test_view_transform_model
     test_view_transform_model.cpp

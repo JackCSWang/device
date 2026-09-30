@@ -1,54 +1,85 @@
 #pragma once
 #include <QObject>
 #include <QString>
+#include <QStringList>
 #include <qqmlintegration.h>
 #include <memory>
-// Q_PROPERTY pointer types must be complete wherever moc's generated code for
-// this class is compiled (only this header, not AppContext.cpp's includes),
-// or Qt 6.8's automatic metatype table generation fails to compile -- so
-// these two, unlike the pImpl-only members below, need real includes rather
-// than forward declarations.
+// Q_PROPERTY and Q_INVOKABLE pointer types must be complete wherever moc's
+// generated code for this class is compiled (only this header, not
+// AppContext.cpp's includes), or Qt 6.8's automatic metatype table
+// generation fails to compile -- so these two, unlike the pImpl-only members
+// below, need real includes rather than forward declarations.
 #include <QVideoSink>
 #include "view/ViewTransformModel.h"
 
-class CaptureController;
+class CaptureSession;
 class DeviceRegistry;
-class ICaptureSource;
-class IRecorder;
-class SnapshotWriter;
 
 // Wires the pipeline together and exposes exactly what QML needs. Holds no
 // logic of its own -- logic lives in microscope_core, where it is tested.
+//
+// That claim used to be false. The whole capture lifecycle (open, teardown
+// ordering, the reopen decision, the recovery policy, device selection) was
+// written here, in the app target, and three Criticals hid in it through
+// fourteen reviews because no test can reach this file. It now lives in
+// CaptureSession. What is left here is genuinely wiring: Q_PROPERTY relays,
+// QSettings persistence of the remembered device id, and
+// openCameraPrivacySettings()'s per-platform URL dispatch.
 class AppContext : public QObject {
     Q_OBJECT
     QML_ELEMENT
     QML_SINGLETON
-    Q_PROPERTY(QVideoSink* videoSink READ videoSink NOTIFY pipelineChanged)
     Q_PROPERTY(ViewTransformModel* transform READ transform CONSTANT)
+    // Current device/pipeline state. Replaced by each new device-state
+    // message, so a transient error does not sit over a healthy pipeline
+    // forever.
     Q_PROPERTY(QString statusText READ statusText NOTIFY statusTextChanged)
+    // The sticky capture-outcome line: the last recording or snapshot that
+    // saved (or failed to). No device-state message can overwrite it, which
+    // is what keeps a saved recording's filename on screen after the
+    // pipeline is torn down and the reopen attempt reports "No scope
+    // detected" (spec 10.1).
+    Q_PROPERTY(QString lastOutcomeText READ lastOutcomeText NOTIFY lastOutcomeTextChanged)
     Q_PROPERTY(bool recording READ recording NOTIFY recordingChanged)
     Q_PROPERTY(bool hasDevice READ hasDevice NOTIFY pipelineChanged)
-    // True when the OS enumerated at least one camera at startup but the
-    // current device list is empty -- the signature of a camera-privacy
-    // block (macOS Settings > Privacy > Camera, Windows camera privacy)
-    // rather than an absent scope (spec 10.3).
+    // True once frames are actually arriving. Recording is gated on this,
+    // not merely on a device being open: a take started before the first
+    // frame has a fabricated resolution and can contain nothing.
+    Q_PROPERTY(bool hasVideo READ hasVideo NOTIFY pipelineChanged)
+    // True when the OS enumerated at least one camera at startup, this app
+    // has never successfully opened one, and the current list is empty --
+    // or when an activation failed with the device still enumerated, which
+    // is how a Windows camera-privacy block actually presents (spec 10.3).
     Q_PROPERTY(bool cameraAccessDenied READ cameraAccessDenied NOTIFY pipelineChanged)
+    // True when more than one video input is present and none has been
+    // chosen (spec 8.5 step 1: "auto-open if exactly one scope, otherwise
+    // prompt").
+    Q_PROPERTY(bool needsDeviceChoice READ needsDeviceChoice NOTIFY pipelineChanged)
+    Q_PROPERTY(QStringList deviceNames READ deviceNames NOTIFY deviceListChanged)
 
 public:
     explicit AppContext(QObject* parent = nullptr);
     ~AppContext() override;
 
-    QVideoSink* videoSink() const;
     ViewTransformModel* transform() const { return m_transform; }
-    QString statusText() const { return m_statusText; }
+    QString statusText() const;
+    QString lastOutcomeText() const;
     bool recording() const;
-    bool hasDevice() const { return m_source != nullptr; }
-    bool cameraAccessDenied() const { return m_cameraAccessDenied; }
+    bool hasDevice() const;
+    bool hasVideo() const;
+    bool cameraAccessDenied() const;
+    bool needsDeviceChoice() const;
+    QStringList deviceNames() const;
 
     Q_INVOKABLE void snapshot();
     Q_INVOKABLE void toggleRecording();
     Q_INVOKABLE void resetView();
     Q_INVOKABLE void openOutputFolder();
+    // Index into deviceNames(). Opens that scope and remembers it.
+    Q_INVOKABLE void selectDevice(int index);
+    // User-initiated recovery after a device error. The Error recovery path
+    // deliberately does not retry on its own (see CaptureSession).
+    Q_INVOKABLE void retry();
     // Opens the OS's camera-privacy settings page so the technician can
     // grant access without hunting for it themselves (spec 10.3).
     Q_INVOKABLE void openCameraPrivacySettings();
@@ -58,31 +89,24 @@ public:
     // external sink can be assigned into. QML hands its item's own sink here
     // so the display path can be wired the only direction Qt Multimedia
     // actually supports: something pushes frames INTO it.
+    //
+    // There is deliberately no `videoSink` Q_PROPERTY to read back. One
+    // existed, unused, and advertised exactly the wiring direction Qt does
+    // not support -- the confusion that caused the live-view defect in the
+    // first place.
     Q_INVOKABLE void setVideoSink(QVideoSink* sink);
 
 signals:
     void pipelineChanged();
     void statusTextChanged();
+    void lastOutcomeTextChanged();
     void recordingChanged();
+    void deviceListChanged();
 
 private:
-    void openFirstAvailableDevice();
-    void teardownPipeline();
-    void setStatus(const QString& text);
-
     DeviceRegistry* m_registry = nullptr;
     ViewTransformModel* m_transform = nullptr;
-    SnapshotWriter* m_writer = nullptr;
-    std::unique_ptr<IRecorder> m_recorder;
-    std::unique_ptr<ICaptureSource> m_source;
-    std::unique_ptr<CaptureController> m_controller;
+    std::unique_ptr<CaptureSession> m_session;
     QMetaObject::Connection m_videoRelay;
-    QString m_statusText;
     QString m_outputDir;
-    // Snapshotted once at construction: whether the OS reported any camera
-    // at all before this app ever asked. Used by openFirstAvailableDevice()
-    // to tell "no scope was ever here" apart from "one was here and is now
-    // being withheld by a privacy gate".
-    bool m_sawDeviceAtStartup = false;
-    bool m_cameraAccessDenied = false;
 };

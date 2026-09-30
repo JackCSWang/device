@@ -1,185 +1,86 @@
 #include "AppContext.h"
-#include "capture/CaptureController.h"
+#include "capture/CaptureSession.h"
 #include "capture/QtCaptureSource.h"
-#include "device/CameraAccessPolicy.h"
+#include "capture/StatusModel.h"
 #include "device/DeviceRegistry.h"
 #include "output/QtRecorder.h"
-#include "output/SnapshotWriter.h"
 #include "storage/OutputLocation.h"
 #include "view/ViewTransformModel.h"
 #include <QDesktopServices>
-#include <QMediaDevices>
+#include <QSettings>
 #include <QUrl>
 #include <QVideoSink>
+
+namespace {
+// Where the remembered scope id is persisted. Persistence is wiring; the
+// *policy* of preferring a remembered device lives in DeviceSelection,
+// which has tests.
+constexpr auto kRememberedDeviceKey = "device/lastUsedId";
+
+QSettings appSettings() {
+    return QSettings(QStringLiteral("WTC"), QStringLiteral("Microscope"));
+}
+} // namespace
 
 AppContext::AppContext(QObject* parent)
     : QObject(parent),
       m_registry(new DeviceRegistry(this)),
       m_transform(new ViewTransformModel(this)),
-      m_writer(new SnapshotWriter(this)),
-      m_outputDir(OutputLocation::defaultDirectory()),
-      m_sawDeviceAtStartup(!QMediaDevices::videoInputs().isEmpty()) {
+      m_outputDir(OutputLocation::defaultDirectory()) {
 
-    OutputLocation::ensureExists(m_outputDir);
+    m_session = std::make_unique<CaptureSession>(
+        m_registry,
+        [](const ScopeDevice& device) -> std::unique_ptr<ICaptureSource> {
+            return std::make_unique<QtCaptureSource>(device.device);
+        },
+        []() -> std::unique_ptr<IRecorder> { return std::make_unique<QtRecorder>(); },
+        m_outputDir);
 
-    // openFirstAvailableDevice() is idempotent (see below): watch()'s
-    // initial synchronous burst of attached() for every already-present
-    // device, and this constructor's own call below (needed for the "no
-    // scope at all" case, which never sees an attached() signal), can both
-    // reach here for the same device -- exactly one of them does the work.
-    connect(m_registry, &DeviceRegistry::attached, this,
-            [this](const ScopeDevice&) { openFirstAvailableDevice(); });
-    connect(m_registry, &DeviceRegistry::detached, this, [this](const QString&) {
-        emit pipelineChanged();
+    connect(m_session.get(), &CaptureSession::pipelineChanged,
+            this, &AppContext::pipelineChanged);
+    connect(m_session.get(), &CaptureSession::recordingChanged,
+            this, &AppContext::recordingChanged);
+    connect(m_session.get(), &CaptureSession::deviceListChanged,
+            this, &AppContext::deviceListChanged);
+    connect(m_session->status(), &StatusModel::deviceStatusChanged,
+            this, &AppContext::statusTextChanged);
+    connect(m_session->status(), &StatusModel::lastOutcomeChanged,
+            this, &AppContext::lastOutcomeTextChanged);
+    connect(m_session.get(), &CaptureSession::frameSizeChanged, this, [this](QSize size) {
+        m_transform->setFrameSize(size);
     });
+    connect(m_session.get(), &CaptureSession::rememberedDeviceIdChanged,
+            this, [](const QString& id) {
+                appSettings().setValue(QLatin1String(kRememberedDeviceKey), id);
+            });
 
-    m_registry->watch();
-    openFirstAvailableDevice();
+    m_session->setRememberedDeviceId(
+        appSettings().value(QLatin1String(kRememberedDeviceKey)).toString());
+    m_session->start();
 }
 
 AppContext::~AppContext() = default;
 
-void AppContext::openFirstAvailableDevice() {
-    if (m_source) return;   // a pipeline is already open; nothing to do
+QString AppContext::statusText() const { return m_session->status()->deviceStatus(); }
+QString AppContext::lastOutcomeText() const { return m_session->status()->lastOutcome(); }
+bool AppContext::recording() const { return m_session->isRecording(); }
+bool AppContext::hasDevice() const { return m_session->hasDevice(); }
+bool AppContext::hasVideo() const { return m_session->hasVideo(); }
+bool AppContext::cameraAccessDenied() const { return m_session->cameraAccessDenied(); }
+bool AppContext::needsDeviceChoice() const { return m_session->needsDeviceChoice(); }
+QStringList AppContext::deviceNames() const { return m_session->deviceDescriptions(); }
 
-    const auto devices = m_registry->available();
-    if (devices.isEmpty()) {
-        // The decision itself (absent scope vs. access denial) is pure
-        // logic and lives in CameraAccessPolicy, with its own tests -- see
-        // that header's comment for why this used to be inline here.
-        const bool wasDenied = m_cameraAccessDenied;
-        m_cameraAccessDenied =
-            CameraAccessPolicy::classify(m_sawDeviceAtStartup, devices.size())
-            == DeviceAbsenceReason::LikelyAccessDenied;
-        if (m_cameraAccessDenied != wasDenied) emit pipelineChanged();
-
-        setStatus(m_cameraAccessDenied
-            ? tr("The scope is connected, but this app is not allowed to use the "
-                 "camera. Open camera privacy settings to allow it.")
-            : tr("No scope detected. Connect the microscope by USB."));
-        return;
-    }
-
-    // A device was found and is about to be opened: any earlier denial no
-    // longer applies. Without this reset, granting access mid-session (the
-    // user opens Settings, grants it, reattaches) leaves the "Open camera
-    // settings" button stuck visible over a fully working pipeline forever
-    // -- the bug this comment exists to prevent regressing.
-    if (m_cameraAccessDenied) {
-        m_cameraAccessDenied = false;
-        emit pipelineChanged();
-    }
-
-    auto* source = new QtCaptureSource(devices.first().device);
-    m_source.reset(source);
-    m_recorder = std::make_unique<QtRecorder>();
-    m_controller = std::make_unique<CaptureController>(
-        m_source.get(), m_recorder.get(), m_writer, m_outputDir);
-
-    connect(m_controller.get(), &CaptureController::status,
-            this, [this](const QString& s) { setStatus(s); });
-    connect(m_controller.get(), &CaptureController::sourceLost, this, [this] {
-        // Defer the actual teardown off this signal's own emitting stack.
-        // sourceLost can be emitted from inside CaptureController's own
-        // recorder-finished()/failed() handler, with a QMediaRecorder's
-        // recorderStateChanged emission (and its backend's frames) still
-        // unwinding beneath it. Deleting that recorder -- and the
-        // controller and source -- synchronously here would free memory
-        // still in use further down the call stack. Queueing
-        // teardownPipeline() lets everything currently emitting finish
-        // unwinding back to the event loop first.
-        QMetaObject::invokeMethod(this, [this] { teardownPipeline(); }, Qt::QueuedConnection);
-    });
-    connect(m_recorder.get(), &IRecorder::finished,
-            this, &AppContext::recordingChanged);
-    // A failed recording also makes isRecording() false (IRecorder's
-    // contract), but nothing previously told QML that: without this,
-    // `recording` stays cached true and the button latches on "Stop
-    // recording" after a failed take. Signal-to-signal, exactly like
-    // finished() above -- not a lambda, which could reach recording control
-    // and reopen the start()-from-a-handler hazard.
-    connect(m_recorder.get(), &IRecorder::failed,
-            this, &AppContext::recordingChanged);
-
-    connect(m_source.get(), &ICaptureSource::frameReady, this,
-            [this](const QVideoFrame& f, qint64) {
-                m_transform->setFrameSize(f.size());
-            });
-
-    m_controller->begin();
-    setStatus(tr("Connected to %1.").arg(devices.first().description));
-    emit pipelineChanged();
-}
-
-void AppContext::teardownPipeline() {
-    if (!m_controller && !m_source && !m_recorder) return;   // already torn down
-
-    // Oldest-dependent first: the controller holds raw pointers into the
-    // source and recorder (and is connected to both), so it must let go of
-    // them before either is released. release() + deleteLater(), not
-    // reset(), so nothing is actually freed until the event loop is idle
-    // again -- this always runs from the queued call in the sourceLost
-    // handler above, but stays correct even if that ever changes. By the
-    // time sourceLost fires, CaptureController has already finalized any
-    // recording that was in flight (see its own ordering guarantees), so
-    // there is nothing left here to finalize.
-    if (auto* controller = m_controller.release()) {
-        // The controller is still alive and still connected to the status/
-        // sourceLost lambdas above until deleteLater() actually runs.
-        // Disconnecting first means a second sourceLost from it in that
-        // window (the controller itself has no such path today, but
-        // nothing prevents one being added later) cannot queue a second
-        // teardownPipeline() call against a sender this object no longer
-        // considers its current controller.
-        controller->disconnect(this);
-        controller->deleteLater();
-    }
-    if (auto* recorder = m_recorder.release()) recorder->deleteLater();
-    if (auto* source = m_source.release()) source->deleteLater();
-
-    emit pipelineChanged();
-    emit recordingChanged();
-
-    // Recovery depends entirely on a future attached() edge, but
-    // DeviceRegistry::refresh() only emits attached() for a device not
-    // already in its known set -- it never re-fires for one already there.
-    // A detach-while-recording delays sourceLost (and so this call) until
-    // the real encoder finalizes, seconds later; a technician who reseats
-    // the cable inside that window produces an attached() that
-    // openFirstAvailableDevice()'s guard swallowed because m_source was
-    // still (briefly) non-null. Without this, that leaves the UI dead until
-    // the application is restarted. Re-polling here re-opens the device if
-    // it is back (non-empty), or leaves the "No scope detected" status if
-    // it genuinely is not (empty) -- both correct.
-    openFirstAvailableDevice();
-}
-
-QVideoSink* AppContext::videoSink() const {
-    return m_controller ? m_controller->displaySink() : nullptr;
-}
-
-bool AppContext::recording() const {
-    return m_controller && m_controller->isRecording();
-}
-
-void AppContext::snapshot() {
-    if (m_controller) m_controller->takeSnapshot();
-}
-
-void AppContext::toggleRecording() {
-    if (!m_controller) return;
-    if (m_controller->isRecording()) m_controller->stopRecording();
-    else m_controller->startRecording();
-    emit recordingChanged();
-}
-
+void AppContext::snapshot() { m_session->takeSnapshot(); }
+void AppContext::toggleRecording() { m_session->toggleRecording(); }
 void AppContext::resetView() { m_transform->resetToFit(); }
+void AppContext::selectDevice(int index) { m_session->selectDevice(index); }
+void AppContext::retry() { m_session->retry(); }
 
 void AppContext::setVideoSink(QVideoSink* sink) {
     disconnect(m_videoRelay);
-    if (m_controller && sink) {
-        m_videoRelay = connect(m_controller->displaySink(), &QVideoSink::videoFrameChanged,
-                                sink, &QVideoSink::setVideoFrame);
+    if (QVideoSink* display = m_session->displaySink(); display && sink) {
+        m_videoRelay = connect(display, &QVideoSink::videoFrameChanged,
+                               sink, &QVideoSink::setVideoFrame);
     }
 }
 
@@ -194,12 +95,7 @@ void AppContext::openCameraPrivacySettings() {
 #elif defined(Q_OS_WIN)
     QDesktopServices::openUrl(QUrl(QStringLiteral("ms-settings:privacy-webcam")));
 #else
-    setStatus(tr("Run: sudo usermod -aG video $USER   then log out and back in."));
+    m_session->status()->setDeviceStatus(
+        tr("Run: sudo usermod -aG video $USER   then log out and back in."));
 #endif
-}
-
-void AppContext::setStatus(const QString& text) {
-    if (m_statusText == text) return;
-    m_statusText = text;
-    emit statusTextChanged();
 }

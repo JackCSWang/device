@@ -52,7 +52,7 @@ CaptureController::CaptureController(ICaptureSource* source, IRecorder* recorder
                     // lambda) -- so it must be the very last thing this
                     // path touches `this` for. Nothing may follow it.
                     emit status(message);
-                    emit sourceLost(message);
+                    emit sourceLost(message, wasDetach ? StopReason::Detached : StopReason::Error);
                 } else if (m_pendingInterruption == RecordingInterruption::Stall) {
                     m_pendingInterruption = RecordingInterruption::None;
                     emit status(tr("The video stream stopped, so the recording was ended and "
@@ -79,7 +79,7 @@ CaptureController::CaptureController(ICaptureSource* source, IRecorder* recorder
                     // See the matching comment in the finished() handler
                     // above: sourceLost must be last.
                     emit status(message);
-                    emit sourceLost(message);
+                    emit sourceLost(message, wasDetach ? StopReason::Detached : StopReason::Error);
                 } else if (m_pendingInterruption == RecordingInterruption::Stall) {
                     m_pendingInterruption = RecordingInterruption::None;
                     emit status(tr("The video stream stopped, so the recording was ended. It "
@@ -322,6 +322,6 @@ void CaptureController::onSourceStopped(StopReason reason, const QString& detail
             message += tr(" Reported cause: %1.").arg(detail);
 
         emit status(message);
-        emit sourceLost(message);
+        emit sourceLost(message, reason);
     }
 }

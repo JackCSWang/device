@@ -8,8 +8,9 @@ target_sources(microscope_core PRIVATE view/ViewTransform.cpp storage/DiskPolicy
     core/ICaptureSource.h
     output/SnapshotWriter.cpp output/IRecorder.h output/QtRecorder.cpp
     capture/CaptureController.cpp
-    device/DeviceRegistry.cpp
-    device/CameraAccessPolicy.cpp
+    device/DeviceRegistry.cpp device/IDeviceRegistry.h
+    device/CameraAccessPolicy.cpp device/StopClassification.h
+    capture/StatusModel.cpp capture/CaptureSession.cpp
     capture/QtCaptureSource.cpp)
 
 qt_add_executable(microscope main.cpp AppContext.cpp)
