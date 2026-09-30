@@ -52,7 +52,16 @@ private slots:
         QCOMPARE(spy.count(), 0);
     }
 
-    void frameDeepCopyOwnsItsPixels() {
+    // Proves that a Frame produced by Frame::deepCopy survives the source
+    // recycling (scribbling over) its buffer after emission. This does NOT
+    // prove that Frame::deepCopy's .copy() call specifically is what makes
+    // that true -- on current Qt, QVideoFrame::toImage() already returns
+    // freshly-allocated storage, so this test would still pass even with
+    // .copy() removed. The .copy() call is kept as belt-and-braces defensive
+    // code (see the comment in Frame.cpp); this test verifies the outward
+    // guarantee (deep copies are immune to source buffer recycling), not the
+    // implementation detail of how that guarantee is achieved.
+    void deepCopyOutlivesSourceBufferRecycle() {
         FakeCaptureSource src;
         src.setFrameSize({64, 48});
         src.setScribbleAfterEmit(true);   // buffer is overwritten after emit
@@ -68,12 +77,42 @@ private slots:
 
         QVERIFY(captured.isValid());
         QCOMPARE(captured.image().size(), QSize(64, 48));
-        // If deepCopy shared the source buffer, scribbling would show here.
+        // If the copy shared the source buffer, scribbling would show here.
         QCOMPARE(captured.image().pixelColor(32, 24).rgb(), expected.rgb());
     }
 
     void deepCopyOfInvalidFrameIsInvalid() {
         QVERIFY(!Frame::deepCopy(QVideoFrame(), 0).isValid());
+    }
+
+    // fillYuyv is the one function a downstream test cannot independently
+    // verify: if it wrote RGB bytes into a YUYV-declared buffer, Task 7's
+    // YUY2 assertion would be checking garbage against garbage and passing
+    // for the wrong reason. This test exercises the real YUYV packing and
+    // BT.601 conversion end to end. The round trip is lossy (chroma
+    // subsampling plus integer rounding), so a small per-channel tolerance
+    // is used instead of exact equality -- a correct round trip of pure red
+    // lands near (255, 0, 2), not exactly (255, 0, 0).
+    void yuyvFrameRoundTripsColourApproximately() {
+        FakeCaptureSource src;
+        src.setFrameSize({64, 48});
+        src.setPixelFormat(QVideoFrameFormat::Format_YUYV);
+        QVERIFY(src.start());
+
+        Frame captured;
+        connect(&src, &ICaptureSource::frameReady, this,
+                [&](const QVideoFrame& f, qint64 ts) {
+                    captured = Frame::deepCopy(f, ts);
+                });
+        const QColor expected = src.nextFillColor();
+        src.emitOneFrame();
+
+        QVERIFY(captured.isValid());
+        const QColor actual = captured.image().pixelColor(32, 24);
+        const int tolerance = 4;
+        QVERIFY(qAbs(actual.red() - expected.red()) <= tolerance);
+        QVERIFY(qAbs(actual.green() - expected.green()) <= tolerance);
+        QVERIFY(qAbs(actual.blue() - expected.blue()) <= tolerance);
     }
 };
 

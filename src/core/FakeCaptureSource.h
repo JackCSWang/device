@@ -1,6 +1,7 @@
 #pragma once
 #include "core/ICaptureSource.h"
 #include <QColor>
+#include <QImage>
 #include <QVideoFrameFormat>
 
 // Synthetic source for tests and CI. Emits a flat frame in a known colour
@@ -37,7 +38,7 @@ public:
     QColor nextFillColor() const;
 
 private:
-    void fillRgb(QVideoFrame& frame, const QColor& c) const;
+    void fillRgb(QVideoFrame& frame, const QColor& c, QImage::Format imageFormat) const;
     void fillYuyv(QVideoFrame& frame, const QColor& c) const;
 
     QSize m_size{640, 480};
