@@ -110,6 +110,17 @@ void CaptureController::begin() {
     OutputLocation::ensureExists(m_outputDir);
     m_sawFirstFrame = false;
     if (!m_source->start()) {
+#ifdef Q_OS_LINUX
+        // On Linux, camera nodes are usually root:video 0660, so a user not
+        // in the video group gets exactly this failure with no indication
+        // why. This is the one place root is unavoidable, so the app must
+        // name the fix rather than leave the technician guessing (spec §4).
+        if (!QFileInfo(QStringLiteral("/dev/video0")).isReadable()) {
+            emit status(tr("No permission to read the camera device. Nothing was saved. "
+                           "Run: sudo usermod -aG video $USER   then log out and back in."));
+            return;
+        }
+#endif
         emit status(tr("Could not open the scope. Nothing was saved. "
                        "Check the cable, then reconnect the device."));
         return;

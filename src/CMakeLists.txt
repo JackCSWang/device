@@ -29,3 +29,12 @@ qt_add_qml_module(microscope
 # directory on this target's include path or that guard silently fails and
 # the type is registered against an incomplete forward declaration.
 target_include_directories(microscope PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/view)
+
+if(APPLE)
+    # Without NSCameraUsageDescription in the bundle's Info.plist, macOS
+    # kills the process on first camera access with no dialog and no error
+    # the user can act on (packaging/macos/Info.plist.in).
+    set_target_properties(microscope PROPERTIES
+        MACOSX_BUNDLE TRUE
+        MACOSX_BUNDLE_INFO_PLIST ${CMAKE_SOURCE_DIR}/packaging/macos/Info.plist.in)
+endif()

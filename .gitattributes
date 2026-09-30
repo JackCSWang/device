@@ -1,0 +1,5 @@
+# Packaging scripts are POSIX shell run from git-bash on Windows as well as
+# macOS/Linux. core.autocrlf=true on a Windows clone would otherwise check
+# these out with CRLF line endings, which can corrupt a #! shebang line and
+# break other POSIX shell constructs -- force LF regardless of platform.
+*.sh text eol=lf

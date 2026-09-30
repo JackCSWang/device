@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Microscope
+Comment=Live view, zoom, snapshot and recording for a USB microscope
+Exec=microscope
+Icon=microscope
+Categories=Graphics;Photography;
+Terminal=false
