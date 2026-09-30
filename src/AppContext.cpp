@@ -98,12 +98,35 @@ void AppContext::teardownPipeline() {
     // time sourceLost fires, CaptureController has already finalized any
     // recording that was in flight (see its own ordering guarantees), so
     // there is nothing left here to finalize.
-    if (auto* controller = m_controller.release()) controller->deleteLater();
+    if (auto* controller = m_controller.release()) {
+        // The controller is still alive and still connected to the status/
+        // sourceLost lambdas above until deleteLater() actually runs.
+        // Disconnecting first means a second sourceLost from it in that
+        // window (the controller itself has no such path today, but
+        // nothing prevents one being added later) cannot queue a second
+        // teardownPipeline() call against a sender this object no longer
+        // considers its current controller.
+        controller->disconnect(this);
+        controller->deleteLater();
+    }
     if (auto* recorder = m_recorder.release()) recorder->deleteLater();
     if (auto* source = m_source.release()) source->deleteLater();
 
     emit pipelineChanged();
     emit recordingChanged();
+
+    // Recovery depends entirely on a future attached() edge, but
+    // DeviceRegistry::refresh() only emits attached() for a device not
+    // already in its known set -- it never re-fires for one already there.
+    // A detach-while-recording delays sourceLost (and so this call) until
+    // the real encoder finalizes, seconds later; a technician who reseats
+    // the cable inside that window produces an attached() that
+    // openFirstAvailableDevice()'s guard swallowed because m_source was
+    // still (briefly) non-null. Without this, that leaves the UI dead until
+    // the application is restarted. Re-polling here re-opens the device if
+    // it is back (non-empty), or leaves the "No scope detected" status if
+    // it genuinely is not (empty) -- both correct.
+    openFirstAvailableDevice();
 }
 
 QVideoSink* AppContext::videoSink() const {
