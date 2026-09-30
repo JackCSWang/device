@@ -1904,7 +1904,7 @@ The behavioural heart of the app. Owns Review Focus item 5 and spec §10.1's def
 - Modify: `src/CMakeLists.txt`, `tests/CMakeLists.txt`
 
 **Interfaces:**
-- Consumes: `ICaptureSource`, `Frame` (7), `SnapshotWriter` (8), `IRecorder` (9), `DiskPolicy` (4), `CaptureNaming`/`OutputLocation` (5).
+- Consumes: `ICaptureSource`, `Frame` (Task 6), `SnapshotWriter` (Task 7), `IRecorder` (Task 8), `DiskPolicy` (Task 3), `CaptureNaming`/`OutputLocation` (Task 4).
 - Produces:
   - `CaptureController(ICaptureSource*, IRecorder*, SnapshotWriter*, QString outputDir, QObject* parent = nullptr)`
   - `void begin()`, `void takeSnapshot()`, `void startRecording()`, `void stopRecording()`
@@ -2348,7 +2348,7 @@ First task that touches a physical camera. Tests here are skipped when no camera
 - Modify: `src/CMakeLists.txt`, `tests/CMakeLists.txt`
 
 **Interfaces:**
-- Consumes: `ICaptureSource` (7), `FormatPreference`/`CaptureFormat` (6).
+- Consumes: `ICaptureSource` (Task 6), `FormatPreference`/`CaptureFormat` (Task 5).
 - Produces:
   - `struct ScopeDevice { QString id; QString description; QCameraDevice device; }`
   - `DeviceRegistry::available() -> QList<ScopeDevice>`; signals `attached(ScopeDevice)`, `detached(QString id)`; `void watch()`
@@ -2669,7 +2669,7 @@ git commit -m "feat(capture): desktop QCamera source and device registry"
 - Modify: `src/CMakeLists.txt`, `tests/CMakeLists.txt`
 
 **Interfaces:**
-- Consumes: `ViewTransform` (3).
+- Consumes: `ViewTransform` (Task 2).
 - Produces: `ViewTransformModel`, a `QML_ELEMENT` with `Q_PROPERTY`s `zoom`, `contentX`, `contentY`, `contentScale`, `canPan`, invokables `zoomAt(qreal, qreal, qreal)`, `panBy(qreal, qreal)`, `resetToFit()`, `setFrameSize(QSizeF)`, `setViewportSize(QSizeF)`, and signal `changed()`.
 
 `contentScale`/`contentX`/`contentY` are what QML binds to on the `VideoOutput` item, so QML contains no transform arithmetic.
@@ -2738,7 +2738,9 @@ QTEST_MAIN(TestViewTransformModel)
 
 - [ ] **Step 2: Register and run to verify it fails**
 
-Add `microscope_test(test_view_transform_model)` to `tests/CMakeLists.txt`.
+Add the explicit `test_view_transform_model` target from Step 5 to
+`tests/CMakeLists.txt` — **not** `microscope_test(...)`, for the reason given
+there.
 
 Expected: FAIL — `view/ViewTransformModel.h: No such file or directory`.
 
@@ -2829,9 +2831,21 @@ void ViewTransformModel::resetToFit() { m_t.resetToFit(); emit changed(); }
 
 - [ ] **Step 5: Add sources and run**
 
+**Do NOT add `ViewTransformModel.cpp` to `microscope_core`.** Task 12 lists it
+in `qt_add_qml_module`, which compiles it into the executable; having it in
+both a linked static library and the QML module risks duplicate QML type
+registration. It is the one file this plan compiles per-consumer instead.
+
+So this test gets its own target rather than using `microscope_test`. Add to
+`tests/CMakeLists.txt`:
+
 ```cmake
-target_sources(microscope_core PRIVATE view/ViewTransformModel.cpp)
-target_link_libraries(microscope_core PUBLIC Qt6::Qml)
+qt_add_executable(test_view_transform_model
+    test_view_transform_model.cpp
+    ${CMAKE_SOURCE_DIR}/src/view/ViewTransformModel.cpp)
+target_link_libraries(test_view_transform_model
+    PRIVATE microscope_core Qt6::Test Qt6::Qml)
+add_test(NAME test_view_transform_model COMMAND test_view_transform_model)
 ```
 
 Add `Qml` to the root `find_package` components.
@@ -2859,7 +2873,7 @@ git commit -m "feat(view): QML-facing transform model"
 - Modify: `src/main.cpp`, `src/CMakeLists.txt`
 
 **Interfaces:**
-- Consumes: `CaptureController` (10), `QtCaptureSource`/`DeviceRegistry` (11), `ViewTransformModel` (12), `QtRecorder` (9), `SnapshotWriter` (8).
+- Consumes: `CaptureController` (Task 9), `QtCaptureSource`/`DeviceRegistry` (Task 10), `ViewTransformModel` (Task 11), `QtRecorder` (Task 8), `SnapshotWriter` (Task 7).
 - Produces: `AppContext`, a `QML_SINGLETON` exposing `Q_PROPERTY`s `videoSink`, `transform`, `statusText`, `recording`, `hasDevice` and invokables `snapshot()`, `toggleRecording()`, `resetView()`, `openOutputFolder()`.
 
 - [ ] **Step 1: Write AppContext**
@@ -3238,8 +3252,8 @@ qt_add_qml_module(microscope
 
 `ViewTransformModel` carries `QML_ELEMENT`, so its header and source must be
 listed in `SOURCES` here for the type to register with the `microscope` URI.
-It stays compiled into `microscope_core` as well so the unit tests in Task 11
-can link it without the QML module.
+It is **not** in `microscope_core` — Task 11's test target compiles it
+directly instead, so it is never in two binaries at once.
 
 - [ ] **Step 6: Build and run with the scope attached**
 
@@ -3757,11 +3771,17 @@ void CaptureController::onSourceStopped(StopReason reason, const QString& detail
     if (wasRecording) m_recorder->finalizeAndStop();
 
     if (reason == StopReason::Detached || reason == StopReason::Error) {
+        // "disconnected" for a detach, "stopped" for a driver error: both of
+        // this task's tests and Task 9's assert on the detach wording.
+        const QString what = (reason == StopReason::Detached)
+            ? tr("The scope was disconnected.")
+            : tr("The scope stopped.");
+
         QString message = wasRecording
-            ? tr("The scope stopped. The recording was saved as %1. "
-                 "Reconnect the scope to continue.").arg(QFileInfo(path).fileName())
-            : tr("The scope stopped. Nothing was being recorded. "
-                 "Reconnect the scope to continue.");
+            ? tr("%1 The recording was saved as %2. Reconnect the scope to "
+                 "continue.").arg(what, QFileInfo(path).fileName())
+            : tr("%1 Nothing was being recorded. Reconnect the scope to "
+                 "continue.").arg(what);
 
         // The driver's detail names the real cause -- another app holding the
         // device, a bandwidth failure, a vanished node. Dropping it is what
@@ -3776,17 +3796,19 @@ void CaptureController::onSourceStopped(StopReason reason, const QString& detail
 }
 ```
 
-- [ ] **Step 4: Keep the "disconnected" wording the earlier tests assert**
+- [ ] **Step 4: Confirm the earlier task's tests still pass**
 
-Task 9's `detachMidRecordingFinalizesAndNamesTheFile` and this task's `detachWithNoRecordingSaysNothingWasBeingRecorded` both expect "disconnected". Use it for `Detached` and "stopped" for `Error`:
+The wording split is already in Step 3's code. Task 9's
+`detachMidRecordingFinalizesAndNamesTheFile` asserts the message names the
+saved file; this task's `detachWithNoRecordingSaysNothingWasBeingRecorded`
+asserts both "disconnected" and "Reconnect". Run both suites:
 
-```cpp
-    const QString what = (reason == StopReason::Detached)
-        ? tr("The scope was disconnected.")
-        : tr("The scope stopped.");
+```bash
+ctest --test-dir build -R "test_capture_controller|test_failure_modes" --output-on-failure
 ```
 
-Build the message from `what` plus the recording clause plus "Reconnect the scope to continue." Re-run Task 9's suite to confirm both still pass.
+Expected: PASS. If the detach wording regressed, Step 3's `what` split is the
+place to fix it — not the tests.
 
 - [ ] **Step 5: Add the macOS camera-privacy deep link**
 
