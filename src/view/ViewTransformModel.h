@@ -35,6 +35,4 @@ signals:
 
 private:
     ViewTransform m_t;
-    QSizeF m_frame{0, 0};
-    QSizeF m_viewport{0, 0};
 };

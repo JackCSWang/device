@@ -15,6 +15,10 @@ public:
 
     qreal zoom() const { return m_zoom; }
     QPointF pan() const { return m_pan; }
+    QSizeF frameSize() const { return m_frame; }
+    QSizeF viewportSize() const { return m_viewport; }
+    qreal scale() const;
+    bool canPan() const;
 
     void zoomAt(qreal factor, QPointF focusInViewport);
     void panBy(QPointF deltaInViewport);
@@ -24,7 +28,6 @@ public:
 
 private:
     qreal fitScale() const;      // viewport px per frame px at zoom 1
-    qreal scale() const;         // viewport px per frame px now
     QSizeF visibleSize() const;  // in frame px
     void clampPan();
 

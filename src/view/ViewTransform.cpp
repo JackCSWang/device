@@ -12,6 +12,11 @@ qreal ViewTransform::fitScale() const {
 
 qreal ViewTransform::scale() const { return fitScale() * m_zoom; }
 
+bool ViewTransform::canPan() const {
+    const QRectF vis = visibleFrameRect();
+    return vis.width() < m_frame.width() - 0.5 || vis.height() < m_frame.height() - 0.5;
+}
+
 QSizeF ViewTransform::visibleSize() const {
     const qreal s = scale();
     if (s <= 0) return m_frame;
