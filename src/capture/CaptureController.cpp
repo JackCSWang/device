@@ -59,6 +59,11 @@ CaptureController::CaptureController(ICaptureSource* source, IRecorder* recorder
                     emit status(tr("The video stream stopped, so the recording was ended and "
                                    "saved as %1. Recording will not resume automatically.")
                                     .arg(QFileInfo(path).fileName()));
+                } else if (m_pendingInterruption == RecordingInterruption::DiskFull) {
+                    m_pendingInterruption = RecordingInterruption::None;
+                    emit status(tr("Storage is nearly full, so the recording was ended and "
+                                   "saved as %1. Free some space before recording again.")
+                                    .arg(QFileInfo(path).fileName()));
                 } else {
                     emit status(tr("Recording saved as %1.").arg(QFileInfo(path).fileName()));
                 }
@@ -85,6 +90,11 @@ CaptureController::CaptureController(ICaptureSource* source, IRecorder* recorder
                     m_pendingInterruption = RecordingInterruption::None;
                     emit status(tr("The video stream stopped, so the recording was ended. It "
                                    "could not be saved: %1").arg(why));
+                } else if (m_pendingInterruption == RecordingInterruption::DiskFull) {
+                    m_pendingInterruption = RecordingInterruption::None;
+                    emit status(tr("Storage is nearly full, so the recording was ended. It "
+                                   "could not be saved: %1 Free some space before "
+                                   "recording again.").arg(why));
                 } else {
                     emit status(why);
                 }
@@ -101,7 +111,7 @@ CaptureController::CaptureController(ICaptureSource* source, IRecorder* recorder
             emit status(tr("No video at this resolution. Trying a lower one."));
             // m_source->stop() emits stopped(Requested, ...) synchronously,
             // re-entering onSourceStopped below. That handler stops both
-            // watchdogs and clears m_snapshotArmed/m_pendingRecordingPath,
+            // watchdogs and clears m_snapshotArmed,
             // but does NOT touch m_stallStopping (only the stall-watchdog
             // path sets that) and only sets m_pendingInterruption when a
             // recording is in flight, which it cannot be here: no frame has
@@ -146,6 +156,10 @@ CaptureController::CaptureController(ICaptureSource* source, IRecorder* recorder
         m_source->start();
         m_firstFrameTimer.start();
     });
+}
+
+void CaptureController::setFreeSpaceProbe(std::function<qint64(const QString&)> probe) {
+    m_diskSpace.setProbe(std::move(probe));
 }
 
 bool CaptureController::isRecording() const {
@@ -207,7 +221,12 @@ void CaptureController::onFrame(const QVideoFrame& frame, qint64 timestampUs) {
         // once per recorded frame -- ~30/s on the display thread -- and
         // spec 8.2 says the capture path never blocks on disk.
         if (DiskPolicy::mustStopRecording(m_diskSpace.freeBytesFor(m_outputDir))) {
-            emit status(tr("Storage is nearly full. Stopping and saving the recording."));
+            // Set before finalizeAndStop(), which can drive the recorder
+            // all the way to finished()/failed() synchronously -- that
+            // handler is where the outcome, and so the filename, becomes
+            // sayable. Nothing is announced here, so the technician gets
+            // exactly one message and it names the file and the action.
+            m_pendingInterruption = RecordingInterruption::DiskFull;
             m_recorder->finalizeAndStop();
         } else {
             m_recorder->feed(frame, timestampUs);
@@ -231,17 +250,32 @@ void CaptureController::takeSnapshot() {
 
 void CaptureController::startRecording() {
     if (isRecording()) return;
+    // Must-fix minor 9: mirror takeSnapshot()'s own guard. Without it,
+    // pressing Record before the first frame started a recorder against a
+    // fabricated 1920x1080 resolution for what might be a 640x480 sensor
+    // (the scope on the development machine is exactly that), and produced
+    // a take that could not contain anything.
+    if (!m_sawFirstFrame) {
+        emit status(tr("No video yet, so nothing was recorded. "
+                       "Wait for the live view, then press Record."));
+        return;
+    }
     if (!DiskPolicy::canStartRecording(DiskPolicy::freeBytesFor(m_outputDir))) {
         emit status(tr("Not enough free storage to record. Nothing was saved. "
                        "Free at least 500 MB and try again."));
         return;
     }
-    const QString path = reserveName(QStringLiteral("mp4"));
+    // m_sawFirstFrame means a real frame has been through onFrame, so the
+    // source has a real size to report -- no fabricated fallback. A source
+    // that still reports nothing is broken, and saying so beats recording
+    // at a resolution nobody chose.
     const QSize size = m_source->frameSize();
-    if (!m_recorder->start(path, size.isEmpty() ? QSize(1920, 1080) : size, 30.0)) {
-        emit status(tr("Could not start recording. Nothing was saved."));
+    if (size.isEmpty()) {
+        emit status(tr("The scope did not report a video size, so nothing was "
+                       "recorded. Reconnect the scope, then try again."));
         return;
     }
+    const QString path = reserveName(QStringLiteral("mp4"));
     // A detach, error, or stall from a *previous* recording may still be
     // waiting on an outcome here (the finished()/failed() handler that would
     // normally clear m_pendingInterruption hasn't run yet). This fresh
@@ -250,9 +284,18 @@ void CaptureController::startRecording() {
     // reported as "the scope was disconnected. The recording was saved as
     // <this file>" -- the original false claim, just relocated onto a
     // healthy take.
+    //
+    // Must-fix minor 2: the reset happens BEFORE start(), not after.
+    // start() calls QMediaRecorder::record(), which can reach
+    // errorOccurred -- and so failed(), and so the interruption-reporting
+    // handler -- synchronously, beneath this call. A reset afterwards would
+    // clear the flag only once that handler had already read the stale one.
     m_pendingInterruption = RecordingInterruption::None;
     m_pendingInterruptionDetail.clear();
-    m_pendingRecordingPath = path;
+    if (!m_recorder->start(path, size, 30.0)) {
+        emit status(tr("Could not start recording. Nothing was saved."));
+        return;
+    }
     emit status(tr("Recording to %1.").arg(QFileInfo(path).fileName()));
 }
 
@@ -264,10 +307,9 @@ void CaptureController::stopRecording() {
 void CaptureController::onSourceStopped(StopReason reason, const QString& detail) {
     m_firstFrameTimer.stop();
     m_stallTimer.stop();
-    m_snapshotArmed = false;
     // Every member write this function needs happens up front, before
     // anything that could destroy `this` -- see the two `return`s below.
-    m_pendingRecordingPath.clear();
+    m_snapshotArmed = false;
 
     const bool wasRecording = isRecording();
     const bool stallInitiated = m_stallStopping;

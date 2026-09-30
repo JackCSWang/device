@@ -85,6 +85,41 @@ private slots:
         // Fuzzy compare with tolerance
         QVERIFY(qAbs(contentYAfter - 540.0) < 50.0);
     }
+
+    // Must-fix minor 11: setFrameSize() is called once per delivered frame
+    // -- it is how the view learns the sensor resolution -- so an
+    // unconditional emit fires changed() at frame rate, re-evaluating every
+    // zoom/pan binding in the QML scene ~30 times a second for a value that
+    // changes once per pipeline.
+    //
+    // Guarded here, in core, where it is testable, rather than at the
+    // AppContext call site, which no test can reach.
+    //
+    // Sensitivity: remove the early return from
+    // ViewTransformModel::setFrameSize() and the spy count becomes 30.
+    void repeatedFrameSizesOfTheSameValueEmitOnce() {
+        auto* m = new ViewTransformModel(this);
+        m->setViewportSize({800, 600});
+        QSignalSpy spy(m, &ViewTransformModel::changed);
+
+        for (int i = 0; i < 30; ++i) m->setFrameSize({640, 480});
+
+        QCOMPARE(spy.count(), 1);
+    }
+
+    // ... and a genuine change still notifies, or the view would never
+    // learn a new sensor resolution after a reconnect at another format.
+    void aChangedFrameSizeStillEmits() {
+        auto* m = new ViewTransformModel(this);
+        m->setViewportSize({800, 600});
+        QSignalSpy spy(m, &ViewTransformModel::changed);
+
+        m->setFrameSize({640, 480});
+        m->setFrameSize({640, 480});
+        m->setFrameSize({1280, 720});
+
+        QCOMPARE(spy.count(), 2);
+    }
 };
 
 QTEST_MAIN(TestViewTransformModel)

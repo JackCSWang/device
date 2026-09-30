@@ -36,6 +36,13 @@ public:
     bool isRecording() const;
     QVideoSink* displaySink() const { return m_displaySink; }
 
+    // Test seam for the frame path's free-space reading. Spec 10.3's "stop
+    // and finalize at 100 MB" row cannot be exercised by filling a real
+    // volume, and the frame path deliberately reads through a throttled
+    // cache rather than stat'ing per frame (Important 8), so the probe
+    // behind that cache is what a test replaces.
+    void setFreeSpaceProbe(std::function<qint64(const QString&)> probe);
+
 signals:
     void status(QString message);
     void snapshotSaved(QString path);
@@ -69,7 +76,12 @@ private:
     // through to the plain "Recording saved" message, discarding the
     // driver's detail and never emitting sourceLost, leaving the pipeline
     // dead until the app was restarted).
-    enum class RecordingInterruption { None, Detach, Error, Stall };
+    // DiskFull sits alongside Stall: both end a take without the scope
+    // itself being at fault, and both must name the file in the outcome
+    // message (must-fix minor 12 -- "Storage is nearly full. Stopping and
+    // saving the recording." named neither the file nor an action, and was
+    // emitted at request time when the outcome was not yet known).
+    enum class RecordingInterruption { None, Detach, Error, Stall, DiskFull };
 
     void onFrame(const QVideoFrame& frame, qint64 timestampUs);
     void onSourceStopped(StopReason reason, const QString& detail);
@@ -96,7 +108,6 @@ private:
     QTimer m_stallTimer;
     bool m_sawFirstFrame = false;
     bool m_snapshotArmed = false;
-    QString m_pendingRecordingPath;
 
     // Set immediately before the stall-watchdog handler calls
     // m_source->stop(), and consumed by onSourceStopped -- which that call

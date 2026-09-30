@@ -196,6 +196,7 @@ private slots:
         QSignalSpy lost(&c, &CaptureController::sourceLost);
 
         c.begin();
+        src.emitOneFrame();          // Record is gated on the first frame
         c.startRecording();
         for (int i = 0; i < 45; ++i) { src.emitOneFrame(); QTest::qWait(16); }
 

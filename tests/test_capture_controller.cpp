@@ -36,7 +36,8 @@
 //    simulateFinished()/simulateMidRecordingError(), or leave it open.
 class ScriptedRecorder : public IRecorder {
 public:
-    bool start(const QString&, const QSize&, qreal) override {
+    bool start(const QString&, const QSize& size, qreal) override {
+        startedSize = size;
         m_recording = true;
         return true;
     }
@@ -54,9 +55,29 @@ public:
     }
 
     int finalizeCalls = 0;
+    QSize startedSize;
 
 private:
     bool m_recording = false;
+};
+
+// Must-fix minor 8. The two placement-new tests below call the
+// controller's destructor from inside the sourceLost handler, which is the
+// point -- but only on the path where sourceLost actually fires. Any
+// earlier QVERIFY failure returns from the test function with a live
+// QObject still sitting in a stack buffer that is about to vanish: Qt's
+// internals keep pointers into it, and the destructor that would unregister
+// them never runs. So the mechanism guarding a use-after-free manufactured
+// one precisely when it detected a regression, turning a clean test failure
+// into a crash or silent corruption in whatever ran next.
+//
+// This runs the destructor exactly once on every path out of the scope.
+// The sourceLost handler releases it first, so the handler keeps being the
+// thing that destroys the controller in the passing case.
+struct PlacementGuard {
+    CaptureController* controller = nullptr;
+    ~PlacementGuard() { if (controller) controller->~CaptureController(); }
+    void release() { controller = nullptr; }
 };
 
 class TestCaptureController : public QObject {
@@ -91,6 +112,7 @@ private slots:
         QSignalSpy lost(&c, &CaptureController::sourceLost);
 
         c.begin();
+        src.emitOneFrame();          // Record is gated on the first frame
         c.startRecording();
         for (int i = 0; i < 45; ++i) { src.emitOneFrame(); QTest::qWait(16); }
 
@@ -120,8 +142,11 @@ private slots:
         QSignalSpy lost(&c, &CaptureController::sourceLost);
 
         c.begin();
+        src.emitOneFrame();   // Record is gated on the first frame; this one
+                              // arrives before the recorder exists, so it is
+                              // not fed to it
         c.startRecording();
-        src.injectDetach();   // no frame was ever fed
+        src.injectDetach();   // no frame was ever fed to the recorder
 
         QVERIFY(lost.wait(15000));
         QCOMPARE(savedRec.count(), 0);
@@ -145,6 +170,7 @@ private slots:
         QSignalSpy msgs(&c, &CaptureController::status);
 
         c.begin();
+        src.emitOneFrame();          // Record is gated on the first frame
         c.startRecording();
         for (int i = 0; i < 10; ++i) { src.emitOneFrame(); QTest::qWait(16); }
         // Then go silent long enough to trip the stall watchdog.
@@ -173,6 +199,7 @@ private slots:
         QSignalSpy savedRec(&c, &CaptureController::recordingSaved);
 
         c.begin();
+        src.emitOneFrame();          // Record is gated on the first frame
         c.startRecording();
         for (int i = 0; i < 20; ++i) { src.emitOneFrame(); QTest::qWait(16); }
         c.takeSnapshot();
@@ -316,6 +343,7 @@ private slots:
         QSignalSpy msgs(&c, &CaptureController::status);
 
         c.begin();
+        src.emitOneFrame();          // Record is gated on the first frame
         c.startRecording();
         const int msgsBeforeError = msgs.count();   // already has "Recording to ..."
         src.emitOneFrame();
@@ -360,6 +388,7 @@ private slots:
         QSignalSpy msgs(&c, &CaptureController::status);
 
         c.begin();
+        src.emitOneFrame();          // Record is gated on the first frame
         c.startRecording();
         src.emitOneFrame();
         src.injectDetach();
@@ -372,6 +401,7 @@ private slots:
 
         // Reconnect and start a second, completely unrelated recording.
         c.begin();
+        src.emitOneFrame();          // begin() resets the first-frame gate
         c.startRecording();
         const QString newPath = m_dir.filePath(QStringLiteral("healthy-take.mp4"));
         rec.simulateFinished(newPath);
@@ -426,6 +456,7 @@ private slots:
         QtRecorder rec; SnapshotWriter writer;
         alignas(CaptureController) std::byte storage[sizeof(CaptureController)];
         auto* c = new (storage) CaptureController(&src, &rec, &writer, m_dir.path());
+        PlacementGuard guard{c};
 
         // A real consumer (AppContext) connects status() too, not just
         // sourceLost(). Without a genuine listener here, status()'s
@@ -443,6 +474,7 @@ private slots:
         bool deleted = false;
         QObject::connect(c, &CaptureController::sourceLost, c, [&] {
             order << QStringLiteral("sourceLost");
+            guard.release();   // the handler owns the destruction from here
             c->~CaptureController();
             std::memset(storage, 0xDE, sizeof storage);
             deleted = true;
@@ -461,6 +493,7 @@ private slots:
         QtRecorder rec; SnapshotWriter writer;
         alignas(CaptureController) std::byte storage[sizeof(CaptureController)];
         auto* c = new (storage) CaptureController(&src, &rec, &writer, m_dir.path());
+        PlacementGuard guard{c};
 
         // See the matching comment in the no-recording variant above.
         QStringList order;
@@ -469,12 +502,14 @@ private slots:
         bool deleted = false;
         QObject::connect(c, &CaptureController::sourceLost, c, [&] {
             order << QStringLiteral("sourceLost");
+            guard.release();   // the handler owns the destruction from here
             c->~CaptureController();
             std::memset(storage, 0xDE, sizeof storage);
             deleted = true;
         });
 
         c->begin();
+        src.emitOneFrame();          // Record is gated on the first frame
         c->startRecording();
         QVERIFY(c->isRecording());   // pin that a recording genuinely began;
                                       // otherwise a silent startRecording()
@@ -496,6 +531,96 @@ private slots:
         // recordingSaved.
         QTRY_VERIFY_WITH_TIMEOUT(deleted, 15000);
         QCOMPARE(order, QStringList({QStringLiteral("status"), QStringLiteral("sourceLost")}));
+    }
+
+    // Must-fix minor 9: Record must be refused before the first frame,
+    // mirroring takeSnapshot()'s own guard. Without it, the recorder was
+    // started against `size.isEmpty() ? QSize(1920, 1080) : size` -- a
+    // fabricated 1080p for a sensor that on the development machine is
+    // 640x480 -- for a take that could not contain anything.
+    //
+    // ScriptedRecorder, not QtRecorder: this has to distinguish "the guard
+    // ran" from "the recorder happened to refuse", and a real QtRecorder
+    // would accept the call.
+    //
+    // Sensitivity: delete the !m_sawFirstFrame guard from startRecording()
+    // and isRecording() becomes true, failing the first assertion.
+    void recordingIsRefusedBeforeTheFirstFrame() {
+        FakeCaptureSource src;
+        src.setDeliverFrames(false);
+        ScriptedRecorder rec; SnapshotWriter writer;
+        CaptureController c(&src, &rec, &writer, m_dir.path());
+
+        QSignalSpy msgs(&c, &CaptureController::status);
+        // m_dir is shared across every test function in this class, so
+        // earlier tests' .mp4 files are already sitting in it -- compare
+        // before and after, not against zero.
+        const int mp4Before =
+            QDir(m_dir.path()).entryList({QStringLiteral("*.mp4")}, QDir::Files).size();
+
+        c.begin();
+        c.startRecording();
+
+        QVERIFY(!c.isRecording());
+        QCOMPARE(QDir(m_dir.path()).entryList({QStringLiteral("*.mp4")}, QDir::Files).size(),
+                 mp4Before);
+        QCOMPARE(msgs.count(), 1);
+        const QString message = msgs.at(0).at(0).toString();
+        QVERIFY2(message.contains(QStringLiteral("No video yet")), qPrintable(message));
+        // Spec 10: state whether data was saved, and the one action to take.
+        QVERIFY(message.contains(QStringLiteral("nothing was recorded")));
+        QVERIFY(message.contains(QStringLiteral("press Record")));
+    }
+
+    // ... and once a frame has arrived it is allowed, at the sensor's real
+    // resolution rather than a fabricated one. This is the half that stops
+    // the guard above from being satisfiable by simply breaking recording.
+    void recordingIsAllowedOnceAFrameHasArrived() {
+        FakeCaptureSource src; src.setFrameSize({640, 480});
+        ScriptedRecorder rec; SnapshotWriter writer;
+        CaptureController c(&src, &rec, &writer, m_dir.path());
+
+        c.begin();
+        src.emitOneFrame();
+        c.startRecording();
+
+        QVERIFY(c.isRecording());
+        QCOMPARE(rec.startedSize, QSize(640, 480));
+    }
+
+    // Must-fix minor 12: "Storage is nearly full. Stopping and saving the
+    // recording." named neither the saved file nor an action, and was
+    // emitted the instant the stop was *requested* -- before the outcome,
+    // and so the filename, was knowable. It is now reported from the
+    // outcome handler like every other interruption.
+    //
+    // Sensitivity: drop the DiskFull branch from the finished() handler and
+    // the message becomes the plain "Recording saved as ..." with no
+    // mention of storage, failing the first two assertions.
+    void aDiskFullStopNamesTheFileAndTheAction() {
+        FakeCaptureSource src; src.setFrameSize({320, 240});
+        ScriptedRecorder rec; SnapshotWriter writer;
+        CaptureController c(&src, &rec, &writer, m_dir.path());
+
+        QSignalSpy msgs(&c, &CaptureController::status);
+        c.begin();
+        src.emitOneFrame();
+        c.startRecording();
+
+        // Pretend the volume just filled up. The frame path reads free
+        // space through the controller's throttled cache, so drive the
+        // reported value rather than trying to fill a real disk.
+        c.setFreeSpaceProbe([](const QString&) { return 1LL * 1024 * 1024; });
+        src.emitOneFrame();
+
+        QVERIFY(!c.isRecording());
+        const QString path = m_dir.filePath(QStringLiteral("disk-full-take.mp4"));
+        rec.simulateFinished(path);
+
+        const QString last = msgs.last().at(0).toString();
+        QVERIFY2(last.contains(QStringLiteral("Storage is nearly full")), qPrintable(last));
+        QVERIFY2(last.contains(QStringLiteral("disk-full-take.mp4")), qPrintable(last));
+        QVERIFY2(last.contains(QStringLiteral("Free some space")), qPrintable(last));
     }
 };
 

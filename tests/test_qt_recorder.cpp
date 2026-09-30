@@ -185,6 +185,64 @@ private slots:
         QCOMPARE(done.count(), 0);
 #endif
     }
+
+    // Must-fix minor 3: the missing test for the m_recording-after-error
+    // change. IRecorder's contract rule 2 says isRecording() must report
+    // false from the moment a recording is known dead, not whenever a
+    // caller next happens to call finalizeAndStop() -- CaptureController's
+    // detach handler depends on it, because a caller that still believes a
+    // recording is in flight defers reporting anything and waits for an
+    // outcome that has already been delivered and will never come again:
+    // total silence rather than a wrong message.
+    //
+    // A nonexistent output directory is the one way to force a
+    // record()-time error deterministically with no platform tricks. (It
+    // never reaches RecordingState, which is why it is no use for
+    // midRecordingErrorReportsFailedNeverFinished above -- that needs an
+    // error *after* frames have been accepted.)
+    //
+    // Sensitivity: this is RED without the errorOccurred handler routing
+    // through finalizeAndStop() -- failed() still fires, so the QTRY
+    // passes, but isRecording() stays true and the last line fails.
+    void anErrorAtStartMakesIsRecordingFalseImmediately() {
+        QtRecorder rec;
+        QSignalSpy bad(&rec, &IRecorder::failed);
+        QSignalSpy done(&rec, &IRecorder::finished);
+
+        const QString out =
+            m_dir.filePath(QStringLiteral("no-such-dir/deeper/clip.mp4"));
+        QVERIFY(!QFileInfo(out).dir().exists());
+
+        // start() itself succeeds: the failure is asynchronous, reported by
+        // QMediaRecorder once record() has been attempted.
+        QVERIFY(rec.start(out, {640, 480}, 30.0));
+        QTRY_VERIFY_WITH_TIMEOUT(bad.count() == 1, 15000);
+
+        // Exactly one of finished/failed, per contract rule 1.
+        QCOMPARE(done.count(), 0);
+        QVERIFY(!rec.isRecording());
+    }
+
+    // Must-fix minor 1, the other half of the one-shot guard: however many
+    // errors QMediaRecorder reports for one broken recording, exactly one
+    // failed() reaches the consumer. Let the error above settle, then wait
+    // a further moment for any second emission the backend has queued.
+    void severalBackendErrorsProduceExactlyOneFailure() {
+        QtRecorder rec;
+        QSignalSpy bad(&rec, &IRecorder::failed);
+
+        QVERIFY(rec.start(m_dir.filePath(QStringLiteral("nope/again/clip.mp4")),
+                          {640, 480}, 30.0));
+        QTRY_VERIFY_WITH_TIMEOUT(bad.count() == 1, 15000);
+
+        // A second start on the same dead recorder is rejected outright
+        // (isRecording() is already false, but m_recorder still exists and
+        // can still report), and an explicit finalizeAndStop() must not
+        // resurrect a second failure either.
+        rec.finalizeAndStop();
+        QTest::qWait(500);
+        QCOMPARE(bad.count(), 1);
+    }
 };
 
 QTEST_MAIN(TestQtRecorder)

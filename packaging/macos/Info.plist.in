@@ -1,13 +1,30 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
   "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  CMake substitutes the MACOSX_BUNDLE_* placeholders below from the target
+  properties set in src/CMakeLists.txt's APPLE block, which derive from
+  project()'s VERSION. Do not hardcode versions here: a literal that drifts
+  from project() is a release ships-the-wrong-version bug waiting to happen.
+
+  CFBundleIdentifier was `com.example.microscope`. `com.example` is a
+  reserved documentation domain, so it cannot be used for a Developer ID
+  application record and therefore cannot be notarized -- and macOS is the
+  platform spec 6 calls the top remaining risk. CFBundleVersion was absent
+  entirely, which `notarytool`/`altool` reject outright.
+-->
 <plist version="1.0">
 <dict>
     <key>CFBundleName</key>            <string>Microscope</string>
     <key>CFBundleExecutable</key>      <string>microscope</string>
-    <key>CFBundleIdentifier</key>      <string>com.example.microscope</string>
+    <key>CFBundleIdentifier</key>      <string>${MACOSX_BUNDLE_GUI_IDENTIFIER}</string>
     <key>CFBundlePackageType</key>     <string>APPL</string>
-    <key>CFBundleShortVersionString</key> <string>0.1.0</string>
+    <!-- The human-facing version (e.g. 0.1.0). -->
+    <key>CFBundleShortVersionString</key> <string>${MACOSX_BUNDLE_SHORT_VERSION_STRING}</string>
+    <!-- The build version. Must be present and must increase with every
+         upload; Apple's notary service rejects a bundle without it. -->
+    <key>CFBundleVersion</key>         <string>${MACOSX_BUNDLE_BUNDLE_VERSION}</string>
+    <key>LSMinimumSystemVersion</key>  <string>12.0</string>
     <key>NSHighResolutionCapable</key> <true/>
     <key>NSCameraUsageDescription</key>
     <string>Microscope needs camera access to show and record the microscope's live view.</string>

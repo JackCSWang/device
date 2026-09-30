@@ -17,7 +17,13 @@ Pane {
 
         Button {
             text: AppContext.recording ? qsTr("Stop recording") : qsTr("Record")
-            enabled: AppContext.hasDevice
+            // Must-fix minor 9: hasVideo, not hasDevice. A recording
+            // started before the first frame has no real resolution to
+            // encode at and cannot contain anything;
+            // CaptureController::startRecording() refuses it, and the
+            // button should not invite it. Snapshot stays on hasDevice so
+            // its own "no video yet" message is still reachable.
+            enabled: AppContext.hasVideo
             Layout.preferredHeight: 56
             highlighted: AppContext.recording
             onClicked: AppContext.toggleRecording()

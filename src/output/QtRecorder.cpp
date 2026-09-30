@@ -28,6 +28,18 @@ bool QtRecorder::start(const QString& path, const QSize& size, qreal frameRate) 
             this, &QtRecorder::onRecorderStateChanged);
     connect(m_recorder.get(), &QMediaRecorder::errorOccurred, this,
             [this](QMediaRecorder::Error, const QString& s) {
+                // Must-fix minor 1: one-shot. QMediaRecorder can report
+                // several errors for one broken recording, and IRecorder's
+                // contract -- written into IRecorder.h in the same commit
+                // as this handler -- says exactly one of finished()/failed()
+                // must be emitted per recording, never both, never twice.
+                // Without this guard a second errorOccurred emits a second
+                // failed(), and a consumer that clears its own deferred
+                // interruption state on the first (as CaptureController
+                // does) reports the second against a recording that no
+                // longer exists.
+                if (m_errored) return;
+
                 // Latch the error so onRecorderStateChanged's later
                 // StoppedState transition never also emits finished() for
                 // this same broken recording (spec 10.1: reporting success

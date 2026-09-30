@@ -11,8 +11,16 @@ bool ViewTransformModel::canPan() const {
     return m_t.canPan();
 }
 
+// Must-fix minor 11: guarded here, in core, where it is testable -- not in
+// AppContext. This is called once per delivered frame (the frame size is
+// how the view learns the sensor resolution), so an unconditional emit
+// fires `changed()` at frame rate, re-evaluating every zoom/pan binding in
+// the QML scene ~30 times a second for a value that changes once per
+// pipeline.
 void ViewTransformModel::setFrameSize(QSizeF size) {
-    m_t.setFrameSize(size); emit changed();
+    if (m_t.frameSize() == size) return;
+    m_t.setFrameSize(size);
+    emit changed();
 }
 void ViewTransformModel::setViewportSize(QSizeF size) {
     m_t.setViewportSize(size); emit changed();

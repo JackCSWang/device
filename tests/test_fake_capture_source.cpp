@@ -114,6 +114,59 @@ private slots:
         QVERIFY(qAbs(actual.green() - expected.green()) <= tolerance);
         QVERIFY(qAbs(actual.blue() - expected.blue()) <= tolerance);
     }
+
+    // Must-fix minor 15: the fake's *own* loud-failure path. This is
+    // FakeCaptureSource's only StopReason::Error producer, and nothing
+    // exercised it -- so the failure-injection source, which every spec
+    // 10.3 row depends on, had an untested failure mode of its own.
+    //
+    // The default branch of emitOneFrame() exists because silently
+    // emitting a garbage or unfilled buffer let any pixel format the fake
+    // cannot synthesise masquerade as a successfully delivered frame.
+    //
+    // Sensitivity: replace that branch with a bare `return` (the old
+    // behaviour) and both the stopped() count and the frameReady() count
+    // assertions fail.
+    void anUnsynthesizablePixelFormatFailsLoudly_data() {
+        QTest::addColumn<QVideoFrameFormat::PixelFormat>("format");
+        QTest::addColumn<QString>("name");
+        // A real format the fake genuinely cannot build (no QImage format
+        // shares NV12's planar layout)...
+        QTest::newRow("NV12") << QVideoFrameFormat::Format_NV12
+                              << QStringLiteral("NV12");
+        // ...and one whose byte order no native QImage format matches.
+        QTest::newRow("ARGB8888") << QVideoFrameFormat::Format_ARGB8888
+                                  << QStringLiteral("ARGB8888");
+    }
+
+    void anUnsynthesizablePixelFormatFailsLoudly() {
+        QFETCH(QVideoFrameFormat::PixelFormat, format);
+        QFETCH(QString, name);
+
+        FakeCaptureSource src;
+        src.setFrameSize({64, 48});
+        src.setPixelFormat(format);
+
+        QSignalSpy frames(&src, &ICaptureSource::frameReady);
+        QSignalSpy stopped(&src, &ICaptureSource::stopped);
+        QVERIFY(src.start());
+
+        src.emitOneFrame();
+
+        QCOMPARE(frames.count(), 0);       // never a garbage frame
+        QCOMPARE(stopped.count(), 1);
+        QCOMPARE(stopped.at(0).at(0).value<StopReason>(), StopReason::Error);
+        const QString detail = stopped.at(0).at(1).toString();
+        QVERIFY2(detail.contains(name, Qt::CaseInsensitive), qPrintable(detail));
+        QVERIFY2(detail.contains(QStringLiteral("cannot synthesize"), Qt::CaseInsensitive),
+                 qPrintable(detail));
+
+        // And it has genuinely stopped: a second attempt is silent rather
+        // than a second error for the same dead source.
+        src.emitOneFrame();
+        QCOMPARE(stopped.count(), 1);
+        QCOMPARE(frames.count(), 0);
+    }
 };
 
 QTEST_MAIN(TestFakeCaptureSource)

@@ -37,9 +37,22 @@ if(APPLE)
     # Without NSCameraUsageDescription in the bundle's Info.plist, macOS
     # kills the process on first camera access with no dialog and no error
     # the user can act on (packaging/macos/Info.plist.in).
+    #
+    # The identifier and both versions are set here rather than in the
+    # plist so they cannot drift from project()'s VERSION.
+    # `com.example.*` is a reserved documentation domain: it cannot back a
+    # Developer ID application record, so a bundle carrying it cannot be
+    # notarized -- and CFBundleVersion's absence is rejected by the notary
+    # service outright. Both were release blockers on the platform spec 6
+    # calls the top remaining risk.
     set_target_properties(microscope PROPERTIES
         MACOSX_BUNDLE TRUE
-        MACOSX_BUNDLE_INFO_PLIST ${CMAKE_SOURCE_DIR}/packaging/macos/Info.plist.in)
+        MACOSX_BUNDLE_INFO_PLIST ${CMAKE_SOURCE_DIR}/packaging/macos/Info.plist.in
+        MACOSX_BUNDLE_GUI_IDENTIFIER com.wtc.microscope
+        MACOSX_BUNDLE_SHORT_VERSION_STRING ${PROJECT_VERSION}
+        # Bump on every notarized upload, independently of the marketing
+        # version: Apple requires CFBundleVersion to strictly increase.
+        MACOSX_BUNDLE_BUNDLE_VERSION ${PROJECT_VERSION}.1)
 endif()
 
 # packaging/linux/build-appimage.sh stages an AppDir via
