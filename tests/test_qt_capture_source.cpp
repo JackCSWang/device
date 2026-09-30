@@ -28,11 +28,51 @@ private slots:
     void deliversAFrameFromRealHardware() {
         if (!haveCamera()) QSKIP("no camera attached");
         QtCaptureSource src(DeviceRegistry().available().first().device);
+        const QSize requested = src.advertisedFormats().first().resolution;
         QSignalSpy frames(&src, &ICaptureSource::frameReady);
         QVERIFY(src.start());
         QVERIFY2(frames.wait(5000), "no frame within 5s -- see spec 10.2");
         QVERIFY(!src.frameSize().isEmpty());
+        // Proves format negotiation actually took effect, not just that some
+        // frame (possibly the camera's own default) arrived.
+        QCOMPARE(src.frameSize(), requested);
         src.stop();
+    }
+
+    // Surveys every enumerated device, not just available().first(). A shared
+    // USB hub can make one device silent while another works fine (spec
+    // 10.2), so per-device results are reported as data rather than a hard
+    // per-device failure -- only "nothing at all delivered" fails the test.
+    void surveyAllDevices() {
+        if (!haveCamera()) QSKIP("no camera attached");
+        const auto devices = DeviceRegistry().available();
+        bool anyDelivered = false;
+        qInfo().noquote() << "=== Per-device hardware survey ===";
+        for (const auto& d : devices) {
+            QtCaptureSource src(d.device);
+            QSignalSpy frames(&src, &ICaptureSource::frameReady);
+            const bool started = src.start();
+            const bool delivered = started && frames.wait(5000);
+            if (delivered) {
+                anyDelivered = true;
+                const QVideoFrame frame = frames.at(0).at(0).value<QVideoFrame>();
+                const auto fmt = frame.surfaceFormat();
+                qInfo().noquote() << QString(
+                    "device=\"%1\" id=%2 started=%3 delivered=yes size=%4x%5 rotation=%6 mirrored=%7")
+                    .arg(d.description, d.id)
+                    .arg(started)
+                    .arg(frame.width()).arg(frame.height())
+                    .arg(int(fmt.rotation()))
+                    .arg(fmt.isMirrored());
+            } else {
+                qInfo().noquote() << QString(
+                    "device=\"%1\" id=%2 started=%3 delivered=no (no frame within 5s)")
+                    .arg(d.description, d.id)
+                    .arg(started);
+            }
+            src.stop();
+        }
+        QVERIFY2(anyDelivered, "no device in the survey delivered a frame");
     }
 
     void stopEmitsRequested() {

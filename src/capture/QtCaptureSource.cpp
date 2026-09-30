@@ -1,6 +1,20 @@
 #include "capture/QtCaptureSource.h"
 #include <QDateTime>
+#include <QMediaDevices>
 #include <algorithm>
+
+namespace {
+// QCamera::Error has only NoError and CameraError -- errorOccurred never
+// fires with NoError, so branching on the error code cannot distinguish a
+// detach from any other failure (device busy, backend failure, bandwidth
+// starvation on a shared hub). Whether the device is still enumerated is the
+// only reliable signal.
+bool isDeviceStillPresent(const QByteArray& id) {
+    for (const QCameraDevice& d : QMediaDevices::videoInputs())
+        if (d.id() == id) return true;
+    return false;
+}
+} // namespace
 
 QtCaptureSource::QtCaptureSource(QCameraDevice device, QObject* parent)
     : ICaptureSource(parent), m_device(std::move(device)) {
@@ -55,10 +69,11 @@ bool QtCaptureSource::start() {
 
     connect(m_camera.get(), &QCamera::errorOccurred, this,
             [this](QCamera::Error error, const QString& detail) {
-                if (error == QCamera::CameraError)
-                    emit stopped(StopReason::Detached, detail);
-                else
+                Q_UNUSED(error); // always CameraError -- see isDeviceStillPresent above
+                if (isDeviceStillPresent(m_device.id()))
                     emit stopped(StopReason::Error, detail);
+                else
+                    emit stopped(StopReason::Detached, detail);
             });
 
     m_camera->start();
