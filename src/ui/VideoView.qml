@@ -1,4 +1,6 @@
 import QtQuick
+import QtQuick.Controls
+import QtQuick.Layouts
 import QtMultimedia
 import microscope
 
@@ -37,6 +39,57 @@ Item {
         target: AppContext
         function onPipelineChanged() {
             AppContext.setVideoSink(output.videoSink)
+        }
+    }
+
+    // Spec 8.5 step 1's "otherwise prompt" half. With more than one video
+    // input present and none remembered, nothing is opened until the
+    // technician says which one is the scope. Deliberately a list of the
+    // OS's own device descriptions and nothing cleverer: the microscope on
+    // the development machine enumerates as "HD camera" and the laptop's
+    // built-in one as "Integrated Camera", so any keyword heuristic picks
+    // the wrong device on the very hardware that matters.
+    Rectangle {
+        id: picker
+        visible: AppContext.needsDeviceChoice
+        anchors.centerIn: parent
+        width: Math.min(root.width - 40, 520)
+        height: Math.min(root.height - 40, pickerLayout.implicitHeight + 40)
+        color: "#1a1a22"
+        border { color: "#3a3a4a"; width: 1 }
+        radius: 6
+
+        ColumnLayout {
+            id: pickerLayout
+            anchors { fill: parent; margins: 20 }
+            spacing: 12
+
+            Label {
+                Layout.fillWidth: true
+                text: qsTr("Select a scope")
+                color: "#f0f0f0"
+                font.pixelSize: 20
+                wrapMode: Text.WordWrap
+            }
+            Label {
+                Layout.fillWidth: true
+                text: qsTr("More than one camera is connected. Choose the microscope; "
+                           + "this machine will remember it.")
+                color: "#b0b0b8"
+                wrapMode: Text.WordWrap
+            }
+
+            Repeater {
+                model: AppContext.deviceNames
+                delegate: Button {
+                    required property string modelData
+                    required property int index
+                    Layout.fillWidth: true
+                    Layout.preferredHeight: 56       // large enough for gloved hands
+                    text: modelData
+                    onClicked: AppContext.selectDevice(index)
+                }
+            }
         }
     }
 

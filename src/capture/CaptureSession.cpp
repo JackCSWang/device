@@ -2,6 +2,7 @@
 #include "capture/CaptureController.h"
 #include "capture/StatusModel.h"
 #include "device/CameraAccessPolicy.h"
+#include "device/DeviceSelection.h"
 #include "output/IRecorder.h"
 #include "output/SnapshotWriter.h"
 #include "storage/OutputLocation.h"
@@ -129,13 +130,29 @@ void CaptureSession::openPreferredDevice() {
         return;
     }
 
-    const ScopeDevice device = m_devices.first();
+    // Critical 1, spec 8.5 step 1: "auto-open if exactly one scope,
+    // otherwise prompt". Binding devices.first() picked the laptop's
+    // integrated webcam on the spec's own field hardware, which made every
+    // other guarantee vacuous -- unplugging the scope mid-recording did
+    // nothing, because the scope was never the source.
+    const DeviceChoice choice = DeviceSelection::choose(m_devices, m_rememberedId);
+    if (choice.kind != DeviceChoice::Kind::Open) {
+        setNeedsChoice(choice.kind == DeviceChoice::Kind::Prompt);
+        setCameraAccessDenied(false);
+        m_status->setDeviceStatus(tr("Select a scope."));
+        return;
+    }
+
     // Critical 3: a device that stays enumerated while refusing to activate
     // must not be reopened on the next event-loop turn, forever.
-    if (device.id == m_blockedDeviceId) return;
+    if (choice.deviceId == m_blockedDeviceId) return;
 
-    setNeedsChoice(false);
-    openDevice(device);
+    for (const ScopeDevice& device : m_devices) {
+        if (device.id != choice.deviceId) continue;
+        setNeedsChoice(false);
+        openDevice(device);
+        return;
+    }
 }
 
 void CaptureSession::openDevice(const ScopeDevice& device) {

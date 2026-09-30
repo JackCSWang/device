@@ -18,6 +18,7 @@ microscope_test(test_format_fallback)
 microscope_test(test_failure_modes)
 microscope_test(test_camera_access_policy)
 microscope_test(test_capture_session)
+microscope_test(test_device_selection)
 
 qt_add_executable(test_view_transform_model
     test_view_transform_model.cpp

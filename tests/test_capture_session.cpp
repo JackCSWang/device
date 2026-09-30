@@ -358,6 +358,72 @@ private slots:
         QVERIFY(!h->session->cameraAccessDenied());
     }
 
+    // Critical 1 at the session level: two cameras, nothing remembered.
+    // Nothing is opened, and the UI is told to ask. The old code bound
+    // devices.first() -- on a laptop, the integrated webcam -- and then
+    // reported success.
+    //
+    // Sensitivity: restore `m_devices.first()` in openPreferredDevice() and
+    // both assertions fail: a source is created and needsDeviceChoice stays
+    // false.
+    void twoDevicesOpenNothingAndAskInstead() {
+        auto h = makeHarness();
+        h->registry.attach(QStringLiteral("webcam"), QStringLiteral("Integrated Camera"));
+        h->registry.attach(QStringLiteral("scope"), QStringLiteral("HD camera"));
+        h->session->start();
+
+        QCOMPARE(h->sourcesMade, 0);
+        QVERIFY(!h->session->hasDevice());
+        QVERIFY(h->session->needsDeviceChoice());
+        QCOMPARE(h->session->deviceDescriptions(),
+                 (QStringList{QStringLiteral("Integrated Camera"), QStringLiteral("HD camera")}));
+        QVERIFY(h->session->status()->deviceStatus().contains(QStringLiteral("Select a scope")));
+    }
+
+    // ... and choosing opens that one, by index into the list the UI shows.
+    void choosingADeviceOpensItAndRemembersItById() {
+        auto h = makeHarness();
+        h->registry.attach(QStringLiteral("webcam"), QStringLiteral("Integrated Camera"));
+        h->registry.attach(QStringLiteral("scope"), QStringLiteral("HD camera"));
+        h->session->start();
+        QSignalSpy remembered(h->session.get(), &CaptureSession::rememberedDeviceIdChanged);
+
+        h->session->selectDevice(1);   // "HD camera"
+
+        QCOMPARE(h->sourcesMade, 1);
+        QVERIFY(h->session->hasDevice());
+        QVERIFY(!h->session->needsDeviceChoice());
+        QCOMPARE(h->session->rememberedDeviceId(), QStringLiteral("scope"));
+        QCOMPARE(remembered.count(), 1);
+        QVERIFY(h->session->status()->deviceStatus().contains(QStringLiteral("HD camera")));
+    }
+
+    // Having chosen once, a later launch with both cameras present must not
+    // ask again -- and must not fall back to first().
+    void aRememberedScopeIsOpenedWithoutAskingEvenWithTheWebcamFirst() {
+        auto h = makeHarness();
+        h->registry.attach(QStringLiteral("webcam"), QStringLiteral("Integrated Camera"));
+        h->registry.attach(QStringLiteral("scope"), QStringLiteral("HD camera"));
+        h->session->setRememberedDeviceId(QStringLiteral("scope"));
+        h->session->start();
+
+        QCOMPARE(h->sourcesMade, 1);
+        QVERIFY(!h->session->needsDeviceChoice());
+        QVERIFY(h->session->status()->deviceStatus().contains(QStringLiteral("HD camera")));
+    }
+
+    // An out-of-range index from QML must be inert, not a crash.
+    void anOutOfRangeSelectionIsIgnored() {
+        auto h = makeHarness();
+        h->registry.attach(QStringLiteral("webcam"), QStringLiteral("Integrated Camera"));
+        h->registry.attach(QStringLiteral("scope"), QStringLiteral("HD camera"));
+        h->session->start();
+        h->session->selectDevice(-1);
+        h->session->selectDevice(2);
+        QCOMPARE(h->sourcesMade, 0);
+        QVERIFY(h->session->needsDeviceChoice());
+    }
+
     // The device line must not be a write-once field: a transient error
     // followed by a healthy pipeline has to clear.
     void aTransientErrorDoesNotPersistOverAHealthyPipeline() {

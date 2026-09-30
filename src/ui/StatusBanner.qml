@@ -14,7 +14,7 @@ Rectangle {
         spacing: 4
         anchors {
             left: parent.left
-            right: settingsButton.visible ? settingsButton.left : parent.right
+            right: buttons.visible ? buttons.left : parent.right
             verticalCenter: parent.verticalCenter
             leftMargin: 10
             rightMargin: 10
@@ -45,11 +45,27 @@ Rectangle {
         }
     }
 
-    Button {
-        id: settingsButton
-        visible: AppContext.cameraAccessDenied
+    Row {
+        id: buttons
+        spacing: 8
+        visible: settingsButton.visible || retryButton.visible
         anchors { right: parent.right; verticalCenter: parent.verticalCenter; rightMargin: 10 }
-        text: qsTr("Open camera settings")
-        onClicked: AppContext.openCameraPrivacySettings()
+
+        Button {
+            id: settingsButton
+            visible: AppContext.cameraAccessDenied
+            text: qsTr("Open camera settings")
+            onClicked: AppContext.openCameraPrivacySettings()
+        }
+
+        // CaptureSession deliberately does not retry a device that failed
+        // to activate while staying enumerated -- that automatic retry was
+        // an unbounded loop. This is the user action that lifts it.
+        Button {
+            id: retryButton
+            visible: !AppContext.hasDevice && !AppContext.needsDeviceChoice
+            text: qsTr("Retry")
+            onClicked: AppContext.retry()
+        }
     }
 }

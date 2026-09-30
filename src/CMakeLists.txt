@@ -10,6 +10,7 @@ target_sources(microscope_core PRIVATE view/ViewTransform.cpp storage/DiskPolicy
     capture/CaptureController.cpp
     device/DeviceRegistry.cpp device/IDeviceRegistry.h
     device/CameraAccessPolicy.cpp device/StopClassification.h
+    device/DeviceSelection.cpp
     capture/StatusModel.cpp capture/CaptureSession.cpp
     capture/QtCaptureSource.cpp)
 
