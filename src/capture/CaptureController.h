@@ -54,7 +54,16 @@ private:
     // finalizeAndStop() is merely requested (spec 10.1: claiming evidence
     // was saved before that is actually known is worse than saying
     // nothing, because the technician stops looking for it).
-    enum class RecordingInterruption { None, Detach, Stall };
+    //
+    // Error sits alongside Detach (both end a recording with the scope
+    // still needing attention) rather than being folded into it: the
+    // deferred handler needs to tell them apart to pick "stopped" vs.
+    // "disconnected" wording (spec 10.3, manual test matrix scenario 5;
+    // task-15-report.md Important 2 -- an Error mid-recording used to fall
+    // through to the plain "Recording saved" message, discarding the
+    // driver's detail and never emitting sourceLost, leaving the pipeline
+    // dead until the app was restarted).
+    enum class RecordingInterruption { None, Detach, Error, Stall };
 
     void onFrame(const QVideoFrame& frame, qint64 timestampUs);
     void onSourceStopped(StopReason reason, const QString& detail);
@@ -79,11 +88,18 @@ private:
     // onSourceStopped before it returns.
     bool m_stallStopping = false;
 
-    // Set by onSourceStopped when a detach or a stall cuts a recording
-    // short, cleared by the finished()/failed() handler that reports the
-    // outcome to the user. None the rest of the time (including a normal
-    // user-requested stopRecording(), which needs no deferred message).
+    // Set by onSourceStopped when a detach, a driver error, or a stall cuts
+    // a recording short, cleared by the finished()/failed() handler that
+    // reports the outcome to the user. None the rest of the time (including
+    // a normal user-requested stopRecording(), which needs no deferred
+    // message).
     RecordingInterruption m_pendingInterruption = RecordingInterruption::None;
+
+    // The driver's detail string for a Detach/Error interruption, carried
+    // from onSourceStopped to the deferred finished()/failed() handler the
+    // same way m_pendingInterruption is. Empty (and unused) for Stall/None.
+    // Cleared alongside m_pendingInterruption -- see both reset sites.
+    QString m_pendingInterruptionDetail;
 
     // Names handed out by reserveName() but not yet necessarily written to
     // disk: SnapshotWriter::write() queues the actual encode on a thread

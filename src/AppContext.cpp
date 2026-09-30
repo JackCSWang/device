@@ -1,6 +1,7 @@
 #include "AppContext.h"
 #include "capture/CaptureController.h"
 #include "capture/QtCaptureSource.h"
+#include "device/CameraAccessPolicy.h"
 #include "device/DeviceRegistry.h"
 #include "output/QtRecorder.h"
 #include "output/SnapshotWriter.h"
@@ -43,12 +44,13 @@ void AppContext::openFirstAvailableDevice() {
 
     const auto devices = m_registry->available();
     if (devices.isEmpty()) {
-        // An empty list is ambiguous on its own: it means either "no scope
-        // was ever attached" or "one was seen at startup and is now being
-        // withheld by a camera-privacy gate". m_sawDeviceAtStartup is what
-        // tells the two apart (spec 10.3).
+        // The decision itself (absent scope vs. access denial) is pure
+        // logic and lives in CameraAccessPolicy, with its own tests -- see
+        // that header's comment for why this used to be inline here.
         const bool wasDenied = m_cameraAccessDenied;
-        m_cameraAccessDenied = m_sawDeviceAtStartup;
+        m_cameraAccessDenied =
+            CameraAccessPolicy::classify(m_sawDeviceAtStartup, devices.size())
+            == DeviceAbsenceReason::LikelyAccessDenied;
         if (m_cameraAccessDenied != wasDenied) emit pipelineChanged();
 
         setStatus(m_cameraAccessDenied
@@ -56,6 +58,16 @@ void AppContext::openFirstAvailableDevice() {
                  "camera. Open camera privacy settings to allow it.")
             : tr("No scope detected. Connect the microscope by USB."));
         return;
+    }
+
+    // A device was found and is about to be opened: any earlier denial no
+    // longer applies. Without this reset, granting access mid-session (the
+    // user opens Settings, grants it, reattaches) leaves the "Open camera
+    // settings" button stuck visible over a fully working pipeline forever
+    // -- the bug this comment exists to prevent regressing.
+    if (m_cameraAccessDenied) {
+        m_cameraAccessDenied = false;
+        emit pipelineChanged();
     }
 
     auto* source = new QtCaptureSource(devices.first().device);

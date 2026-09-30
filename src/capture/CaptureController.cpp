@@ -30,14 +30,21 @@ CaptureController::CaptureController(ICaptureSource* source, IRecorder* recorder
             [this](const QString& path, qint64) {
                 emit recordingSaved(path);
                 // The outcome is now known, so this is the first point at
-                // which a detach- or stall-interrupted recording can be
-                // reported without asserting something not yet true. Exactly
-                // one status message reaches the user either way.
-                if (m_pendingInterruption == RecordingInterruption::Detach) {
+                // which a detach-, error-, or stall-interrupted recording
+                // can be reported without asserting something not yet true.
+                // Exactly one status message reaches the user either way.
+                if (m_pendingInterruption == RecordingInterruption::Detach ||
+                    m_pendingInterruption == RecordingInterruption::Error) {
+                    const bool wasDetach = m_pendingInterruption == RecordingInterruption::Detach;
+                    const QString cause = m_pendingInterruptionDetail;
                     m_pendingInterruption = RecordingInterruption::None;
-                    const QString message =
-                        tr("The scope was disconnected. The recording was saved as %1. "
-                           "Reconnect the scope to continue.").arg(QFileInfo(path).fileName());
+                    m_pendingInterruptionDetail.clear();
+                    const QString what = wasDetach ? tr("The scope was disconnected.")
+                                                    : tr("The scope stopped.");
+                    QString message = tr("%1 The recording was saved as %2. Reconnect the "
+                                         "scope to continue.").arg(what, QFileInfo(path).fileName());
+                    if (!cause.isEmpty())
+                        message += tr(" Reported cause: %1.").arg(cause);
                     // sourceLost may destroy this controller (a direct,
                     // same-thread connection can delete it synchronously,
                     // and it can even destroy the QtRecorder whose own
@@ -57,11 +64,18 @@ CaptureController::CaptureController(ICaptureSource* source, IRecorder* recorder
             });
     connect(m_recorder, &IRecorder::failed, this,
             [this](const QString&, const QString& why) {
-                if (m_pendingInterruption == RecordingInterruption::Detach) {
+                if (m_pendingInterruption == RecordingInterruption::Detach ||
+                    m_pendingInterruption == RecordingInterruption::Error) {
+                    const bool wasDetach = m_pendingInterruption == RecordingInterruption::Detach;
+                    const QString cause = m_pendingInterruptionDetail;
                     m_pendingInterruption = RecordingInterruption::None;
-                    const QString message =
-                        tr("The scope was disconnected. The recording could not be saved: %1")
-                            .arg(why);
+                    m_pendingInterruptionDetail.clear();
+                    const QString what = wasDetach ? tr("The scope was disconnected.")
+                                                    : tr("The scope stopped.");
+                    QString message =
+                        tr("%1 The recording could not be saved: %2").arg(what, why);
+                    if (!cause.isEmpty())
+                        message += tr(" Reported cause: %1.").arg(cause);
                     // See the matching comment in the finished() handler
                     // above: sourceLost must be last.
                     emit status(message);
@@ -225,14 +239,16 @@ void CaptureController::startRecording() {
         emit status(tr("Could not start recording. Nothing was saved."));
         return;
     }
-    // A detach or stall from a *previous* recording may still be waiting
-    // on an outcome here (the finished()/failed() handler that would
+    // A detach, error, or stall from a *previous* recording may still be
+    // waiting on an outcome here (the finished()/failed() handler that would
     // normally clear m_pendingInterruption hasn't run yet). This fresh
-    // recording must not inherit that flag: without this reset, this
-    // recording's own, unrelated finished() would later be reported as
-    // "the scope was disconnected. The recording was saved as <this file>"
-    // -- the original false claim, just relocated onto a healthy take.
+    // recording must not inherit that flag or its stale detail: without this
+    // reset, this recording's own, unrelated finished() would later be
+    // reported as "the scope was disconnected. The recording was saved as
+    // <this file>" -- the original false claim, just relocated onto a
+    // healthy take.
     m_pendingInterruption = RecordingInterruption::None;
+    m_pendingInterruptionDetail.clear();
     m_pendingRecordingPath = path;
     emit status(tr("Recording to %1.").arg(QFileInfo(path).fileName()));
 }
@@ -261,10 +277,17 @@ void CaptureController::onSourceStopped(StopReason reason, const QString& detail
     // Record *why* the recording was cut short and let the finished()/
     // failed() handler report the outcome once it actually is known.
     if (wasRecording) {
-        if (reason == StopReason::Detached)
-            m_pendingInterruption = RecordingInterruption::Detach;
-        else if (stallInitiated)
+        if (reason == StopReason::Detached || reason == StopReason::Error) {
+            m_pendingInterruption = (reason == StopReason::Detached)
+                ? RecordingInterruption::Detach : RecordingInterruption::Error;
+            // Carried to the deferred finished()/failed() handler, which is
+            // the only place left that can still name the driver's cause
+            // once this function returns (spec 10.3; task-15-report.md
+            // Important 2 -- previously discarded entirely for this path).
+            m_pendingInterruptionDetail = detail;
+        } else if (stallInitiated) {
             m_pendingInterruption = RecordingInterruption::Stall;
+        }
         // finalizeAndStop() can synchronously drive the recorder all the way
         // to finished()/failed(), which -- since m_pendingInterruption is
         // now set -- can itself emit sourceLost() and let a consumer delete

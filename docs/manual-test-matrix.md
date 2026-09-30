@@ -225,6 +225,27 @@ recording" — a latched button implies the app still thinks it's recording,
 which would mislead the technician into believing evidence is still being
 captured when it is not.
 
+### 11. Camera access denied by OS privacy settings, then granted
+
+**Setup:** with the scope attached, deny this app's camera permission in
+the OS's privacy settings (or run before ever granting it), launch the app,
+then grant permission and reattach/reopen without restarting the app.
+
+**Expected:** the status banner names the permission problem (not "no scope
+detected") and shows an "Open camera settings" button; after granting
+access and reattaching, the button disappears and the live view starts
+normally — it must not stay stuck visible over a working pipeline.
+
+**Platform note — cheap to log, not worth chasing:** the denial detection
+(`AppContext::m_sawDeviceAtStartup` / `CameraAccessPolicy`) relies on the
+device list being non-empty at startup and empty once denied. This is a
+heuristic: on macOS, AVFoundation's enumeration does not necessarily hide a
+device behind the privacy gate the way this assumes, so a **never-granted**
+first launch (permission denied before the app ever ran, rather than
+revoked mid-session) may not trip `cameraAccessDenied` there. Record
+whether it does on each macOS run; do not treat a miss here as a release
+blocker on its own.
+
 ## Known hardware facts
 
 Record these against every matrix run, because they change what a pass
