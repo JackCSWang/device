@@ -7,6 +7,7 @@
 #include "storage/OutputLocation.h"
 #include "view/ViewTransformModel.h"
 #include <QDesktopServices>
+#include <QMediaDevices>
 #include <QUrl>
 #include <QVideoSink>
 
@@ -15,7 +16,8 @@ AppContext::AppContext(QObject* parent)
       m_registry(new DeviceRegistry(this)),
       m_transform(new ViewTransformModel(this)),
       m_writer(new SnapshotWriter(this)),
-      m_outputDir(OutputLocation::defaultDirectory()) {
+      m_outputDir(OutputLocation::defaultDirectory()),
+      m_sawDeviceAtStartup(!QMediaDevices::videoInputs().isEmpty()) {
 
     OutputLocation::ensureExists(m_outputDir);
 
@@ -41,7 +43,18 @@ void AppContext::openFirstAvailableDevice() {
 
     const auto devices = m_registry->available();
     if (devices.isEmpty()) {
-        setStatus(tr("No scope detected. Connect the microscope by USB."));
+        // An empty list is ambiguous on its own: it means either "no scope
+        // was ever attached" or "one was seen at startup and is now being
+        // withheld by a camera-privacy gate". m_sawDeviceAtStartup is what
+        // tells the two apart (spec 10.3).
+        const bool wasDenied = m_cameraAccessDenied;
+        m_cameraAccessDenied = m_sawDeviceAtStartup;
+        if (m_cameraAccessDenied != wasDenied) emit pipelineChanged();
+
+        setStatus(m_cameraAccessDenied
+            ? tr("The scope is connected, but this app is not allowed to use the "
+                 "camera. Open camera privacy settings to allow it.")
+            : tr("No scope detected. Connect the microscope by USB."));
         return;
     }
 
@@ -160,6 +173,17 @@ void AppContext::setVideoSink(QVideoSink* sink) {
 
 void AppContext::openOutputFolder() {
     QDesktopServices::openUrl(QUrl::fromLocalFile(m_outputDir));
+}
+
+void AppContext::openCameraPrivacySettings() {
+#ifdef Q_OS_MACOS
+    QDesktopServices::openUrl(QUrl(QStringLiteral(
+        "x-apple.systempreferences:com.apple.preference.security?Privacy_Camera")));
+#elif defined(Q_OS_WIN)
+    QDesktopServices::openUrl(QUrl(QStringLiteral("ms-settings:privacy-webcam")));
+#else
+    setStatus(tr("Run: sudo usermod -aG video $USER   then log out and back in."));
+#endif
 }
 
 void AppContext::setStatus(const QString& text) {

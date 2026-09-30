@@ -134,14 +134,15 @@ live test exercises the busy/error path — `FakeCaptureSource` can simulate
 a detach but not a real driver-level "device busy" error. This scenario is
 the only way that logic gets exercised against reality before release.
 
-**Explicit fail condition — total silence:** as of this writing,
-`onSourceStopped` has no branch at all for `StopReason::Error` while
-nothing is recording, so the true current behaviour is not a wrong message
-but **no banner appearing whatsoever**. If that is what you observe, mark
-this **Fail** — do not treat silence as an ambiguous or passing result just
-because nothing claimed the scope was disconnected. (A fix that gives this
-path a real "stopped" message is tracked separately; this note exists so a
-regression back to silence is caught here rather than waved through.)
+**Explicit fail condition — total silence:** `onSourceStopped` now has a
+branch for `StopReason::Error` while nothing is recording (Task 15), so a
+banner reading "The scope stopped. Nothing was being recorded. Reconnect
+the scope to continue." — plus, whenever the driver supplies one, a
+trailing "Reported cause: …" naming the conflict — is the expected
+behaviour again. **Total silence here is a regression** and must be marked
+**Fail** on sight; it would mean the Task 15 fix itself broke. (Silence was
+the true pre-Task-15 behaviour, which is why this note originally existed —
+see git history for the prior wording.)
 
 ### 6. Resize the window while panned at high zoom
 

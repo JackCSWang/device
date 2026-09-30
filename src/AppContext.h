@@ -28,6 +28,11 @@ class AppContext : public QObject {
     Q_PROPERTY(QString statusText READ statusText NOTIFY statusTextChanged)
     Q_PROPERTY(bool recording READ recording NOTIFY recordingChanged)
     Q_PROPERTY(bool hasDevice READ hasDevice NOTIFY pipelineChanged)
+    // True when the OS enumerated at least one camera at startup but the
+    // current device list is empty -- the signature of a camera-privacy
+    // block (macOS Settings > Privacy > Camera, Windows camera privacy)
+    // rather than an absent scope (spec 10.3).
+    Q_PROPERTY(bool cameraAccessDenied READ cameraAccessDenied NOTIFY pipelineChanged)
 
 public:
     explicit AppContext(QObject* parent = nullptr);
@@ -38,11 +43,15 @@ public:
     QString statusText() const { return m_statusText; }
     bool recording() const;
     bool hasDevice() const { return m_source != nullptr; }
+    bool cameraAccessDenied() const { return m_cameraAccessDenied; }
 
     Q_INVOKABLE void snapshot();
     Q_INVOKABLE void toggleRecording();
     Q_INVOKABLE void resetView();
     Q_INVOKABLE void openOutputFolder();
+    // Opens the OS's camera-privacy settings page so the technician can
+    // grant access without hunting for it themselves (spec 10.3).
+    Q_INVOKABLE void openCameraPrivacySettings();
 
     // VideoOutput.videoSink is CONSTANT (read-only) in QtQuick's QML API --
     // it is the render target VideoOutput itself owns, not something an
@@ -70,4 +79,10 @@ private:
     QMetaObject::Connection m_videoRelay;
     QString m_statusText;
     QString m_outputDir;
+    // Snapshotted once at construction: whether the OS reported any camera
+    // at all before this app ever asked. Used by openFirstAvailableDevice()
+    // to tell "no scope was ever here" apart from "one was here and is now
+    // being withheld by a privacy gate".
+    bool m_sawDeviceAtStartup = false;
+    bool m_cameraAccessDenied = false;
 };

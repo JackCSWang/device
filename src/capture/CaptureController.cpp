@@ -243,7 +243,6 @@ void CaptureController::stopRecording() {
 }
 
 void CaptureController::onSourceStopped(StopReason reason, const QString& detail) {
-    Q_UNUSED(detail)
     m_firstFrameTimer.stop();
     m_stallTimer.stop();
     m_snapshotArmed = false;
@@ -276,12 +275,29 @@ void CaptureController::onSourceStopped(StopReason reason, const QString& detail
         return;
     }
 
-    if (reason == StopReason::Detached) {
-        const QString message = tr("The scope was disconnected. Nothing was being recorded. "
-                                   "Reconnect the scope to continue.");
-        // sourceLost may destroy this controller synchronously (a direct,
-        // same-thread connection) -- it must be the last statement on this
-        // path too.
+    if (reason == StopReason::Detached || reason == StopReason::Error) {
+        // "disconnected" sends a technician to check a cable that is fine
+        // whenever the real cause is a driver/backend error with the scope
+        // still plugged in (a busy device, a bandwidth failure) -- Task 10
+        // correctly split Error out from Detached for exactly this reason,
+        // but nothing spoke for it until now (manual test matrix scenario 5
+        // used to log this as an explicit Fail: total silence).
+        const QString what = (reason == StopReason::Detached)
+            ? tr("The scope was disconnected.")
+            : tr("The scope stopped.");
+        QString message = tr("%1 Nothing was being recorded. Reconnect the scope to "
+                             "continue.").arg(what);
+
+        // The driver's detail names the real cause -- another app holding
+        // the device, a bandwidth failure, a vanished node -- and this is
+        // the only place that information exists. Dropping it is what turns
+        // a diagnosable fault into a bare "failed to open" (spec 10.3). This
+        // must stay a local (non-member) append: sourceLost has to remain
+        // the last statement on this path (see the comment above) since a
+        // consumer's handler may delete `this` synchronously.
+        if (!detail.isEmpty())
+            message += tr(" Reported cause: %1.").arg(detail);
+
         emit status(message);
         emit sourceLost(message);
     }
