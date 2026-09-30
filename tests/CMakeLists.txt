@@ -5,3 +5,4 @@ function(microscope_test name)
 endfunction()
 
 microscope_test(test_harness)
+microscope_test(test_view_transform)
