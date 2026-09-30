@@ -92,6 +92,18 @@ bool QtCaptureSource::selectNextFormat() {
     return true;
 }
 
+QStringList QtCaptureSource::formatDescriptions() const {
+    QStringList out;
+    out.reserve(m_formats.size());
+    for (const CaptureFormat& f : m_formats) {
+        out.append(QStringLiteral("%1x%2 @ %3fps")
+                       .arg(f.resolution.width())
+                       .arg(f.resolution.height())
+                       .arg(f.maxFrameRate, 0, 'f', 0));
+    }
+    return out;
+}
+
 void QtCaptureSource::stop() {
     if (!m_camera) return;
     m_camera->stop();

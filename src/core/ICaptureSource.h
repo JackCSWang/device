@@ -1,6 +1,7 @@
 #pragma once
 #include <QObject>
 #include <QSize>
+#include <QStringList>
 #include <QVideoFrame>
 
 enum class StopReason { Requested, Detached, Error };
@@ -32,6 +33,11 @@ public:
     // downgrade-and-retry (spec 10.2). Sources with nothing to fall back to
     // return false, which is why this is virtual rather than pure.
     virtual bool selectNextFormat() { return false; }
+
+    // Human-readable list of what the device advertised, for the "all formats
+    // failed" message. Reporting the list is what makes a silent scope
+    // diagnosable from the field (spec 10.3).
+    virtual QStringList formatDescriptions() const { return {}; }
 
 signals:
     void frameReady(const QVideoFrame& frame, qint64 timestampUs);

@@ -3,6 +3,7 @@
 #include <QObject>
 #include <QSet>
 #include <QString>
+#include <QStringList>
 #include <QTimer>
 #include <QVideoFrame>
 
@@ -40,6 +41,11 @@ signals:
     void recordingSaved(QString path);
     void sourceLost(QString message);
     void firstFrameTimedOut();
+    // Emitted once the format preference chain is exhausted with no frame
+    // ever seen -- the watchdog tried every advertised format and gave up
+    // (spec 10.2/10.3). advertised is whatever formatDescriptions() reports,
+    // possibly empty for a source that doesn't implement it.
+    void formatsExhausted(QStringList advertised);
 
 private:
     // Why a recorder was cut short mid-take, tracked so the *outcome*

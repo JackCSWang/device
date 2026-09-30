@@ -79,10 +79,41 @@ CaptureController::CaptureController(ICaptureSource* source, IRecorder* recorder
     m_firstFrameTimer.setInterval(FirstFrameTimeoutMs);
     connect(&m_firstFrameTimer, &QTimer::timeout, this, [this] {
         // open() succeeded but nothing streamed -- the classic shared-hub
-        // isochronous bandwidth failure (spec 10.2).
+        // isochronous bandwidth failure (spec 10.2). Walk down the format
+        // preference chain before giving up; complaining without retrying is
+        // not what the spec asks for.
+        if (m_source->selectNextFormat()) {
+            emit status(tr("No video at this resolution. Trying a lower one."));
+            // m_source->stop() emits stopped(Requested, ...) synchronously,
+            // re-entering onSourceStopped below. That handler stops both
+            // watchdogs and clears m_snapshotArmed/m_pendingRecordingPath,
+            // but does NOT touch m_stallStopping (only the stall-watchdog
+            // path sets that) and only sets m_pendingInterruption when a
+            // recording is in flight, which it cannot be here: no frame has
+            // ever arrived, so nothing has had a chance to start one through
+            // the normal UI flow. The re-entrant call also is not
+            // StopReason::Detached, so it never reaches sourceLost. So this
+            // restart cannot trip the stall or interruption bookkeeping.
+            // What it DOES do is stop m_firstFrameTimer (it's a no-op; the
+            // timer already fired and is a single-shot). Restarting the
+            // timer must therefore happen last, after stop()/start(), so
+            // that reentrant stop() is not able to disarm the *new* watchdog
+            // out from under this retry.
+            m_source->stop();
+            m_sawFirstFrame = false;
+            m_source->start();
+            m_firstFrameTimer.start();
+            return;
+        }
+
+        const QStringList advertised = m_source->formatDescriptions();
         emit firstFrameTimedOut();
-        emit status(tr("No video received from the scope. Nothing was saved. "
-                       "Try a direct USB port instead of a hub, or a lower resolution."));
+        emit formatsExhausted(advertised);
+        emit status(tr("No video received from the scope at any resolution. "
+                       "Nothing was saved. Try a direct USB port instead of a hub. "
+                       "The scope offered: %1")
+                        .arg(advertised.isEmpty() ? tr("no formats")
+                                                  : advertised.join(QStringLiteral(", "))));
     });
 
     m_stallTimer.setSingleShot(true);

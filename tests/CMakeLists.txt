@@ -14,6 +14,7 @@ microscope_test(test_snapshot_writer)
 microscope_test(test_qt_recorder)
 microscope_test(test_capture_controller)
 microscope_test(test_qt_capture_source)
+microscope_test(test_format_fallback)
 
 qt_add_executable(test_view_transform_model
     test_view_transform_model.cpp

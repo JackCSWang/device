@@ -22,7 +22,9 @@ public:
 
     // Advances to the next format in the preference chain. Returns false when
     // the chain is exhausted -- the watchdog uses this on a silent open.
-    bool selectNextFormat();
+    bool selectNextFormat() override;
+
+    QStringList formatDescriptions() const override;
 
 private:
     void applySelectedFormat();
