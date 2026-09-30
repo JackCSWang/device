@@ -24,4 +24,16 @@ class FormatPreference {
 public:
     static constexpr int TargetArea = 1920 * 1080;
     static QList<CaptureFormat> order(const QList<CaptureFormat>& advertised);
+
+    // The ordering predicate itself: "a is preferable to b". Exposed so the
+    // strict-weak-ordering property can be tested directly -- a comparator
+    // that is not a valid strict weak ordering lets std::sort do anything
+    // at all, including crash, and nothing about the sorted *output* of a
+    // handful of example lists would reveal it.
+    static bool isBetter(const CaptureFormat& a, const CaptureFormat& b);
+
+    // Exposed for the same reason: the cap is the one non-obvious term in
+    // the ordering, and a test that recomputes it from TargetArea itself
+    // stays honest if the target ever changes.
+    static int cappedArea(const QSize& s);
 };

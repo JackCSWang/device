@@ -1,5 +1,6 @@
 #pragma once
 #include "core/ICaptureSource.h"
+#include "storage/DiskPolicy.h"
 #include <QObject>
 #include <QSet>
 #include <QString>
@@ -84,6 +85,12 @@ private:
     SnapshotWriter* m_writer;
     QVideoSink* m_displaySink;
     QString m_outputDir;
+
+    // The frame path's free-space reading. User actions (takeSnapshot,
+    // startRecording) deliberately still use DiskPolicy::freeBytesFor()
+    // directly: those happen once, at human speed, and deserve a fresh
+    // answer.
+    DiskSpaceCache m_diskSpace;
 
     QTimer m_firstFrameTimer;
     QTimer m_stallTimer;

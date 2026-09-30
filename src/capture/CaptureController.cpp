@@ -203,7 +203,10 @@ void CaptureController::onFrame(const QVideoFrame& frame, qint64 timestampUs) {
     }
 
     if (m_recorder->isRecording()) {
-        if (DiskPolicy::mustStopRecording(DiskPolicy::freeBytesFor(m_outputDir))) {
+        // Important 8: the throttled reading, not a fresh stat. This runs
+        // once per recorded frame -- ~30/s on the display thread -- and
+        // spec 8.2 says the capture path never blocks on disk.
+        if (DiskPolicy::mustStopRecording(m_diskSpace.freeBytesFor(m_outputDir))) {
             emit status(tr("Storage is nearly full. Stopping and saving the recording."));
             m_recorder->finalizeAndStop();
         } else {

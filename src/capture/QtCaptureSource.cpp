@@ -20,6 +20,11 @@ bool isDeviceStillPresent(const QByteArray& id) {
 QtCaptureSource::QtCaptureSource(QCameraDevice device, QObject* parent)
     : ICaptureSource(parent), m_device(std::move(device)) {
 
+    // The relay is this object's single delivery point; forwarding its
+    // signal keeps ICaptureSource's contract ("always emitted on the
+    // thread the source lives on") true for every consumer.
+    connect(&m_relay, &FrameRelay::frameReady, this, &ICaptureSource::frameReady);
+
     // Order once through FormatPreference, then rebuild the native list to
     // match. Do NOT try to express the ordering as a pairwise comparator over
     // QCameraFormat -- that is not a strict weak ordering and std::sort is
@@ -58,6 +63,12 @@ bool QtCaptureSource::start() {
     m_session->setVideoSink(m_sink.get());
     applySelectedFormat();
 
+    // DirectConnection, deliberately: the lambda runs on whatever thread
+    // the backend pushes from, and FrameRelay -- not Qt's event queue --
+    // is what decides how that crosses onto this object's thread. With
+    // AutoConnection, a backend thread would silently produce one queued
+    // event per frame, which is the unbounded queue spec 8.4 forbids (see
+    // FrameRelay's header, and Important 7 in the final review).
     connect(m_sink.get(), &QVideoSink::videoFrameChanged, this,
             [this](const QVideoFrame& frame) {
                 if (!frame.isValid()) return;
@@ -65,8 +76,8 @@ bool QtCaptureSource::start() {
                 const qint64 ts = frame.startTime() >= 0
                     ? frame.startTime()
                     : QDateTime::currentMSecsSinceEpoch() * 1000;
-                emit frameReady(frame, ts);
-            });
+                m_relay.offer(frame, ts);
+            }, Qt::DirectConnection);
 
     connect(m_camera.get(), &QCamera::errorOccurred, this,
             [this](QCamera::Error error, const QString& detail) {

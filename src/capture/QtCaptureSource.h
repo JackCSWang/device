@@ -1,5 +1,6 @@
 #pragma once
 #include "capture/FormatPreference.h"
+#include "capture/FrameRelay.h"
 #include "core/ICaptureSource.h"
 #include <QCamera>
 #include <QCameraDevice>
@@ -13,6 +14,11 @@ class QtCaptureSource : public ICaptureSource {
     Q_OBJECT
 public:
     explicit QtCaptureSource(QCameraDevice device, QObject* parent = nullptr);
+
+    // Exposed for the hardware test that records what the backend actually
+    // does: coalescedCount() stays 0 for as long as delivery is
+    // same-thread, which is what it is on Windows.
+    const FrameRelay& relay() const { return m_relay; }
 
     bool start() override;
     void stop() override;
@@ -33,6 +39,12 @@ public:
 
 private:
     void applySelectedFormat();
+
+    // Every frame from the backend goes through here, so frameReady is
+    // always emitted on this object's own thread with at most one frame
+    // ever pending (spec 8.4). Declared before m_camera so it outlives the
+    // sink whose callbacks feed it.
+    FrameRelay m_relay;
 
     QCameraDevice m_device;
     std::unique_ptr<QCamera> m_camera;

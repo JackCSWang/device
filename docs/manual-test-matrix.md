@@ -39,7 +39,7 @@ single most important row in this entire document.
 
 ## Part B — extended scenarios
 
-These ten scenarios either don't fit a single Pass/Fail cell in Part A, or
+These fifteen scenarios either don't fit a single Pass/Fail cell in Part A, or
 were flagged during Task 13 as **verified only by code inspection**, with no
 automated test and no live exercise yet. Each needs its own row in the
 release notes: platform, scope model, hub (if applicable), Pass/Fail, and
@@ -95,6 +95,24 @@ the technician must press Record again once the stream is healthy. Compare
 against the exact wording in `CaptureController.cpp`'s stall branch of the
 recorder's `finished`/`failed` handlers.
 
+**Two deliberate deviations from spec §10.3's wording** ("one silent reopen
+attempt, then surface"), both pre-existing and both now recorded rather
+than left to be rediscovered:
+
+1. The reopen is **announced** ("The video stream stopped. Reconnecting."),
+   not silent. Spec §10 also says every failure must state what happened,
+   and a live view that freezes for five seconds and then resumes with no
+   explanation is exactly what generates a support call.
+2. It is **unbounded** across repeated stalls, not one attempt. A stall is
+   recoverable and a scope that stalls twice is not thereby broken.
+
+Both halves of the row are now automated —
+`test_failure_modes::aStalledStreamIsReopenedAndKeepsBeingWatched` (the
+reopen actually delivers a frame again, and the watchdog re-arms) and
+`::aReopenThatDeliversNothingSurfacesViaTheFirstFrameWatchdog` (the "then
+surface" half). The previous test asserted only that some message contained
+"stopped", and stayed green with the entire reopen deleted.
+
 ### 4. Cable reseat during the deferred-teardown window
 
 **Setup:** trigger scenario 1 (detach mid-recording), then — while the app
@@ -105,12 +123,17 @@ teardown is deliberately deferred — reseat (replug) the cable.
 teardown completes the app is ready to start a new session against the
 reconnected (or a newly enumerated) device.
 
-**Why this is the priority verification item:** a fix for a bug in exactly
-this window (reseating during deferred teardown previously left the UI dead
-until restart) has **no automated test** — the code has no seam to inject a
-fake device registry mid-teardown. This manual run is the *only*
-verification that fix will ever receive. Do not skip it, and do not assume
-it still works just because it worked once.
+**Why this used to be the priority verification item, and what changed:** a
+fix for a bug in exactly this window (reseating during deferred teardown
+previously left the UI dead until restart) had **no automated test** —
+AppContext had no seam to inject a fake device registry mid-teardown. The
+final fix wave extracted that lifecycle into `CaptureSession` behind an
+`IDeviceRegistry` seam, and this case is now covered by
+`test_capture_session::aReseatInsideTheDeferredTeardownWindowRecovers`,
+which asserts that the attach edge is *swallowed* (proving the one-shot
+re-poll is the only thing that can recover it) and then that recovery
+happens. Run this row anyway: the automated version fakes the registry, so
+only a real reseat exercises the OS's own `videoInputsChanged` timing.
 
 ### 5. Device-busy or backend error with the scope still plugged in
 
@@ -126,24 +149,28 @@ say the scope was **disconnected**, since it is still physically attached
 and a "disconnected" message sends the technician checking a cable that is
 fine.
 
-**Why this is the highest-priority *untested* item in the whole project:**
-the classification logic that tells a stop-because-detached apart from a
-stop-because-busy/backend-error is correct only by inspection
-(`onSourceStopped`'s `StopReason` handling in `CaptureController.cpp`). No
-live test exercises the busy/error path — `FakeCaptureSource` can simulate
-a detach but not a real driver-level "device busy" error. This scenario is
-the only way that logic gets exercised against reality before release.
+**Why this matters and what is now automated:** the classification that
+tells a stop-because-detached apart from a stop-because-busy is now a pure
+helper, `StopClassification::forCameraError()`, with unit tests that need no
+hardware (`test_camera_access_policy::aStillEnumeratedDeviceErrorIsNotADetach`),
+and the wording downstream of it is covered by
+`test_failure_modes::errorDuringRecordingNamesTheCauseAndEndsTheTake`.
 
-**Explicit fail condition — total silence:** `onSourceStopped` now has a
-branch for `StopReason::Error` while nothing is recording (Task 15), so a
-banner reading "The scope stopped. Nothing was being recorded. Reconnect
-the scope to continue." — plus, whenever the driver supplies one, a
-trailing "Reported cause: …" naming the conflict — is the expected
-behaviour again. **Total silence here is a regression** and must be marked
-**Fail** on sight; it would mean the Task 15 fix itself broke. (Silence was
-the true pre-Task-15 behaviour, which is why this note originally existed —
-see git history for the prior wording.)
+A **live** test also exists —
+`test_qt_capture_source::aBusyDeviceIsAnErrorAndIsNotCalledDisconnected`,
+which holds the device open on one handle and opens it from a second — but
+it **SKIPs on the Windows development machine**: Qt 6.8.3's `ffmpeg`
+multimedia backend there permits two concurrent readers of one camera, so a
+"device busy" condition cannot be provoked at all. Record on every platform
+run whether that test skips or actually asserts; where it skips, this manual
+row is still the only verification.
 
+**Explicit fail condition — total silence:** `onSourceStopped` has a branch
+for `StopReason::Error` while nothing is recording (Task 15), so a banner
+reading "The scope stopped. Nothing was being recorded. Reconnect the scope
+to continue." — plus, whenever the driver supplies one, a trailing "Reported
+cause: …" naming the conflict — is the expected behaviour. **Total silence
+here is a regression** and must be marked **Fail** on sight.
 ### 6. Resize the window while panned at high zoom
 
 **Setup:** zoom in (well above 1x, ideally near 8x) and pan away from
@@ -246,6 +273,99 @@ revoked mid-session) may not trip `cameraAccessDenied` there. Record
 whether it does on each macOS run; do not treat a miss here as a release
 blocker on its own.
 
+
+### 12. Two cameras present — the scope must not be guessed
+
+**Setup:** a laptop with a built-in webcam, plus the USB scope. Delete the
+remembered device first (`device/lastUsedId` under the app's `QSettings` —
+on Windows, `HKCU\Software\WTC\Microscope`), then launch.
+
+**Expected:** nothing opens. The banner says "Select a scope." and a picker
+lists both cameras by their OS descriptions. Choosing the scope opens it,
+and the choice survives a restart — relaunch with both cameras present and
+the scope must open with no prompt. Unplug the scope, relaunch, and the
+webcam (now the only input) must open on its own.
+
+**Why it matters:** this was Critical 1. The old code bound
+`devices.first()`, which on this hardware is "Integrated Camera" — the
+execution ledger records Task 10's hardware tests binding to it rather than
+the microscope. Everything else in the app is vacuous when the wrong device
+is open: unplugging the scope mid-recording does nothing, because the scope
+was never the source.
+
+**Fail conditions:** any automatic choice between two cameras; a prompt that
+reappears after a device has been chosen; the picker listing zero or one
+entry when two cameras are attached; or the app opening a device whose
+description it guessed from a keyword (the scope here enumerates as "HD
+camera", so every plausible keyword rule picks the webcam).
+
+### 13. A persistently busy or erroring device must not loop
+
+**Setup:** hold the scope open in another application so it stays
+enumerated but cannot be activated (see scenario 5 for how; if that backend
+allows two readers, use any other means of making activation fail while the
+device stays listed). Then launch Microscope, or press Retry, and **watch
+the banner for at least 30 seconds**.
+
+**Expected:** one open attempt, one message naming the driver's cause, and
+then nothing. The banner must sit still. A Retry button is offered, and
+pressing it makes exactly one further attempt.
+
+**Fail condition — the banner alternating** between an error and "Connected
+to …", or CPU sitting at a constant load with no video: that is Critical 3
+back. It ran one full open → error → teardown → open cycle per event-loop
+turn, forever. `test_capture_session::aPersistentlyErroringDeviceIsNotReopenedInALoop`
+covers the logic with a fake registry; this row is the check against a real
+driver, whose error timing is its own.
+
+### 14. An unplug that produces no camera error
+
+**Setup:** unplug the scope while the app is idle (not recording), on a
+machine and driver combination where `QCamera::errorOccurred` does **not**
+fire — some backends only report the device vanishing through
+`QMediaDevices::videoInputsChanged`. Try it both with the scope as the only
+camera and with a second camera present.
+
+**Expected:** the banner updates to "No scope detected. Connect the
+microscope by USB." (or opens the remaining camera, if one is present and
+remembered). It must **not** offer "Open camera privacy settings".
+
+**Why it matters:** this was Important 1. `cameraAccessDenied` was true
+whenever any camera existed at launch, which is the normal case since the
+scope is plugged in before the app starts — so an ordinary unplug offered a
+privacy-settings button for a cable lying on the bench.
+`CameraAccessPolicy::classify()` now also takes whether this app ever
+successfully opened a device; a pipeline that ran proves access was
+granted. Note on every run whether the detach arrived as a camera error, as
+a device-list change, or both.
+
+### 15. Windows camera-privacy denial — does it even detect?
+
+**Setup:** on Windows, with the scope attached, deny camera access in
+Settings → Privacy & security → Camera, then launch the app.
+
+**Expected:** the banner names a permissions problem and an "Open camera
+settings" button appears, deep-linking to `ms-settings:privacy-webcam`
+(spec §10.3). After granting access and pressing Retry (or reattaching),
+the button disappears and the live view starts.
+
+**The specific doubt to record:** the original detection required the device
+list to come back **empty** when denied. On Windows a privacy-blocked
+camera generally still enumerates and fails at *activation*, so that
+condition never held and the deep link had no way to appear. The fix adds a
+second, independent trigger — `CameraAccessPolicy::activationFailureMayBeAccessDenied()`:
+an activation failure with the device **still enumerated** and no frame
+ever delivered is treated as a *candidate* denial, and the settings link is
+offered **alongside** the driver's reported cause, never instead of it.
+
+So record three things on every Windows run: (a) whether the device still
+enumerates while denied, (b) whether the button appears, and (c) whether
+the driver's cause is still shown next to it. A busy device reaches the same
+state, which is why the wording must stay "you may not be allowed to use
+the camera" alongside the real cause rather than asserting a denial. Do not
+treat a *false positive* on a busy device as a release blocker; do treat a
+missing button on a genuine denial as one.
+
 ## Known hardware facts
 
 Record these against every matrix run, because they change what a pass
@@ -279,14 +399,14 @@ looks like on the hardware actually available:
   Every row in this document, Part A and Part B alike, must be run fresh
   the first time either platform is built, with no assumption carried over
   from the Windows results.
-- **The Linux permission check only ever looks at `/dev/video0`.**
-  `CaptureController::begin()`'s `Q_OS_LINUX` branch hardcodes that one
-  device node (per the Task 13 brief). If the scope enumerates at
-  `/dev/video1` or higher — plausible on a machine with a built-in webcam
-  or a second capture device present — an actual permission problem on the
-  real device node will **not** be detected, and the technician gets the
-  generic "could not open the scope" message instead of the actionable
-  `usermod -aG video` hint. Note which device node the scope actually
-  enumerated as (`v4l2-ctl --list-devices` or equivalent) on every Linux
-  matrix run, and treat a missed permission hint on a non-`/dev/video0`
-  device as an expected gap, not a surprise failure.
+- **The Linux permission check now uses the device's real node.**
+  `CaptureController::permissionHintForError()` asks the source for
+  `deviceNode()` (on V4L2, `QCameraDevice::id()` *is* the `/dev/videoN`
+  path) instead of hardcoding `/dev/video0`, and it runs on the
+  `StopReason::Error` path rather than on `!start()`, which activation's
+  asynchrony made unreachable. Still note which node the scope enumerated
+  as (`v4l2-ctl --list-devices`) on every Linux run — this code has never
+  been executed on Linux, because no Linux toolchain exists on the
+  development machine. The decision itself is unit-tested on Windows
+  (`StopClassification::isDeviceNodePermissionProblem`); only the
+  `QFileInfo` stat around it is unverified.
