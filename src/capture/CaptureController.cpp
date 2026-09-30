@@ -38,8 +38,14 @@ CaptureController::CaptureController(ICaptureSource* source, IRecorder* recorder
                     const QString message =
                         tr("The scope was disconnected. The recording was saved as %1. "
                            "Reconnect the scope to continue.").arg(QFileInfo(path).fileName());
-                    emit sourceLost(message);
+                    // sourceLost may destroy this controller (a direct,
+                    // same-thread connection can delete it synchronously,
+                    // and it can even destroy the QtRecorder whose own
+                    // finished() emission is still unwinding beneath this
+                    // lambda) -- so it must be the very last thing this
+                    // path touches `this` for. Nothing may follow it.
                     emit status(message);
+                    emit sourceLost(message);
                 } else if (m_pendingInterruption == RecordingInterruption::Stall) {
                     m_pendingInterruption = RecordingInterruption::None;
                     emit status(tr("The video stream stopped, so the recording was ended and "
@@ -56,8 +62,10 @@ CaptureController::CaptureController(ICaptureSource* source, IRecorder* recorder
                     const QString message =
                         tr("The scope was disconnected. The recording could not be saved: %1")
                             .arg(why);
-                    emit sourceLost(message);
+                    // See the matching comment in the finished() handler
+                    // above: sourceLost must be last.
                     emit status(message);
+                    emit sourceLost(message);
                 } else if (m_pendingInterruption == RecordingInterruption::Stall) {
                     m_pendingInterruption = RecordingInterruption::None;
                     emit status(tr("The video stream stopped, so the recording was ended. It "
@@ -197,6 +205,9 @@ void CaptureController::onSourceStopped(StopReason reason, const QString& detail
     m_firstFrameTimer.stop();
     m_stallTimer.stop();
     m_snapshotArmed = false;
+    // Every member write this function needs happens up front, before
+    // anything that could destroy `this` -- see the two `return`s below.
+    m_pendingRecordingPath.clear();
 
     const bool wasRecording = isRecording();
     const bool stallInitiated = m_stallStopping;
@@ -213,14 +224,23 @@ void CaptureController::onSourceStopped(StopReason reason, const QString& detail
             m_pendingInterruption = RecordingInterruption::Detach;
         else if (stallInitiated)
             m_pendingInterruption = RecordingInterruption::Stall;
+        // finalizeAndStop() can synchronously drive the recorder all the way
+        // to finished()/failed(), which -- since m_pendingInterruption is
+        // now set -- can itself emit sourceLost() and let a consumer delete
+        // this controller before this call even returns. `this` must not be
+        // touched again on this path; the destructor already ran by the
+        // time control gets back here if that happened.
         m_recorder->finalizeAndStop();
+        return;
     }
 
-    if (reason == StopReason::Detached && !wasRecording) {
+    if (reason == StopReason::Detached) {
         const QString message = tr("The scope was disconnected. Nothing was being recorded. "
                                    "Reconnect the scope to continue.");
-        emit sourceLost(message);
+        // sourceLost may destroy this controller synchronously (a direct,
+        // same-thread connection) -- it must be the last statement on this
+        // path too.
         emit status(message);
+        emit sourceLost(message);
     }
-    m_pendingRecordingPath.clear();
 }

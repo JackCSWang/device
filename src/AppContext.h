@@ -58,6 +58,7 @@ signals:
 
 private:
     void openFirstAvailableDevice();
+    void teardownPipeline();
     void setStatus(const QString& text);
 
     DeviceRegistry* m_registry = nullptr;

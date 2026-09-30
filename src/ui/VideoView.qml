@@ -13,7 +13,11 @@ Item {
 
     VideoOutput {
         id: output
-        anchors.centerIn: parent
+        // No anchors.centerIn here: it and the x/y bindings below both
+        // target the same axes and differ by exactly the pan offset.
+        // QQuickAnchors re-applies setPos() on every geometry change, so on
+        // a resize the anchor can silently win and drop the pan offset
+        // until the next gesture. The x/y arithmetic below already centres.
         width: root.width
         height: root.height
         fillMode: VideoOutput.PreserveAspectFit
@@ -38,10 +42,12 @@ Item {
 
     PinchHandler {
         target: null
-        onActiveScaleChanged: {
-            if (activeScale > 0)
-                AppContext.transform.zoomAt(activeScale, centroid.position.x, centroid.position.y)
-        }
+        // activeScale is cumulative since the gesture began (1.0 at pinch
+        // start), but zoomAt() multiplies by its factor -- feeding it the
+        // running total in as a per-event factor would compound every
+        // intermediate total into the zoom. scaleChanged's own delta
+        // parameter is the actual per-event factor.
+        onScaleChanged: (delta) => AppContext.transform.zoomAt(delta, centroid.position.x, centroid.position.y)
     }
 
     WheelHandler {

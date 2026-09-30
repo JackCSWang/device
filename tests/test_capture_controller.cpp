@@ -6,6 +6,39 @@
 #include "output/IRecorder.h"
 #include "output/QtRecorder.h"
 #include "output/SnapshotWriter.h"
+#include <cstdlib>
+#include <cstring>
+
+// Poison every freed small-to-medium block in this test binary, and
+// deliberately never return it to the allocator, instead of freeing it
+// normally. Poisoning-then-freeing was tried first and was not enough: nothing
+// stops an unrelated allocation from reusing the same block microseconds
+// later (which measurably happened here -- Qt's own bookkeeping churns
+// through several small allocations while a signal emission unwinds), and
+// once that happens a dangling read sees the *new* object's legitimate
+// bytes, not poison, and quietly "works". That is exactly why the first two
+// attempts at deletingTheControllerInsideSourceLostSurvives...() below
+// passed unchanged against the pre-fix CaptureController.cpp (see
+// task-12-report.md's sensitivity-proof section for the full transcript,
+// including the diagnostic instrumentation that caught this). Leaking is
+// safe: this is a short-lived test binary, not a long-running process, and
+// only small/medium blocks (<=64KiB -- generously larger than any QObject or
+// Qt container node this file allocates) are quarantined, so real per-frame
+// video buffers elsewhere in this suite are unaffected and still freed
+// normally. The sized global operator delete is what the compiler actually
+// calls for `delete c;` on a complete type.
+namespace {
+constexpr std::size_t kQuarantineLimit = 65536;
+}
+void operator delete(void* p, std::size_t size) noexcept {
+    if (!p) return;
+    if (size <= kQuarantineLimit) {
+        std::memset(p, 0xDE, size);   // poisoned and intentionally leaked
+    } else {
+        std::free(p);
+    }
+}
+void operator delete(void* p) noexcept { std::free(p); }
 
 // A scriptable IRecorder test double, used by three tests below to probe
 // CaptureController's own logic in isolation from a real recorder's
@@ -381,6 +414,84 @@ private slots:
         QCOMPARE(lost.count(), 0);
         for (const auto& call : msgs)
             QVERIFY(!call.at(0).toString().contains(QStringLiteral("disconnected")));
+    }
+
+    // Review round 3, Critical C1: a real consumer's sourceLost handler may
+    // delete the controller synchronously -- AppContext's own did, until it
+    // was changed to defer its teardown off the emitting stack (see
+    // task-12-report.md). Regardless of what any particular consumer does,
+    // CaptureController itself must never touch `this` after the sourceLost
+    // emit that a synchronous deleter reacts to: the old code followed that
+    // emit with a plain member access on freed memory when nothing was
+    // recording (Path A), and, when a recording was in flight, emitted
+    // sourceLost from inside the recorder's own finished()/failed() handler
+    // -- deleting the recorder while its own recorderStateChanged emission
+    // was still unwinding beneath it (Path B). Both are plain
+    // use-after-free, not something Qt's connection-list reentrancy safety
+    // covers. These two tests build a consumer that does exactly what the
+    // old AppContext did -- delete synchronously, from inside the
+    // sourceLost handler itself -- and confirm the controller survives it,
+    // with and without a recording in flight.
+    void deletingTheControllerInsideSourceLostSurvivesWithNoRecordingInFlight() {
+        FakeCaptureSource src; src.setFrameSize({640, 480});
+        QtRecorder rec; SnapshotWriter writer;
+        auto* c = new CaptureController(&src, &rec, &writer, m_dir.path());
+
+        // A real consumer (AppContext) connects status() too, not just
+        // sourceLost(). Without a genuine listener here, status()'s
+        // emit -- the very statement that follows the deleting sourceLost
+        // emit on this path -- can degenerate into "sender has no
+        // connections for this signal, return", which does not exercise
+        // the same freed connection-list data a real dispatch would. Give
+        // it a real one, exactly like the sensitivity run for this test
+        // required (see task-12-report.md).
+        int statusCount = 0;
+        QObject::connect(c, &CaptureController::status, c,
+                          [&](const QString&) { ++statusCount; });
+        bool deleted = false;
+        QObject::connect(c, &CaptureController::sourceLost, c, [&] {
+            delete c;
+            deleted = true;
+        });
+
+        c->begin();
+        src.emitOneFrame();
+        src.injectDetach();   // synchronous: onSourceStopped -> sourceLost -> delete c
+
+        QVERIFY(deleted);
+    }
+
+    void deletingTheControllerInsideSourceLostSurvivesWithARecordingInFlight() {
+        FakeCaptureSource src; src.setFrameSize({640, 480});
+        QtRecorder rec; SnapshotWriter writer;
+        auto* c = new CaptureController(&src, &rec, &writer, m_dir.path());
+
+        // See the matching comment in the no-recording variant above: a
+        // real status() listener is what makes this path's UAF (a lone
+        // emit status() right after the deleting sourceLost() emit, inside
+        // the recorder's own finished()/failed() handler) reliably
+        // detectable rather than a no-op fast path.
+        int statusCount = 0;
+        QObject::connect(c, &CaptureController::status, c,
+                          [&](const QString&) { ++statusCount; });
+        bool deleted = false;
+        QObject::connect(c, &CaptureController::sourceLost, c, [&] {
+            delete c;
+            deleted = true;
+        });
+
+        c->begin();
+        c->startRecording();
+        for (int i = 0; i < 45; ++i) { src.emitOneFrame(); QTest::qWait(16); }
+
+        src.injectDetach();
+
+        // finalizeAndStop()'s outcome can resolve asynchronously (real
+        // QtRecorder, real encoder), so the delete may land after
+        // injectDetach() returns -- wait for it exactly like
+        // detachMidRecordingFinalizesAndNamesTheFile() waits for
+        // recordingSaved.
+        QTRY_VERIFY_WITH_TIMEOUT(deleted, 15000);
     }
 };
 
