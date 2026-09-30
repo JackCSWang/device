@@ -42,6 +42,14 @@ signals:
     void firstFrameTimedOut();
 
 private:
+    // Why a recorder was cut short mid-take, tracked so the *outcome*
+    // (finished/failed -- always asynchronous; see IRecorder's contract)
+    // can be reported accurately instead of asserted the instant
+    // finalizeAndStop() is merely requested (spec 10.1: claiming evidence
+    // was saved before that is actually known is worse than saying
+    // nothing, because the technician stops looking for it).
+    enum class RecordingInterruption { None, Detach, Stall };
+
     void onFrame(const QVideoFrame& frame, qint64 timestampUs);
     void onSourceStopped(StopReason reason, const QString& detail);
     QString reserveName(const QString& extension) const;
@@ -57,6 +65,19 @@ private:
     bool m_sawFirstFrame = false;
     bool m_snapshotArmed = false;
     QString m_pendingRecordingPath;
+
+    // Set immediately before the stall-watchdog handler calls
+    // m_source->stop(), and consumed by onSourceStopped -- which that call
+    // can re-enter synchronously -- to tell a stall-initiated stop apart
+    // from any other StopReason::Requested. Always cleared by
+    // onSourceStopped before it returns.
+    bool m_stallStopping = false;
+
+    // Set by onSourceStopped when a detach or a stall cuts a recording
+    // short, cleared by the finished()/failed() handler that reports the
+    // outcome to the user. None the rest of the time (including a normal
+    // user-requested stopRecording(), which needs no deferred message).
+    RecordingInterruption m_pendingInterruption = RecordingInterruption::None;
 
     // Names handed out by reserveName() but not yet necessarily written to
     // disk: SnapshotWriter::write() queues the actual encode on a thread

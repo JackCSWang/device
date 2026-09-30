@@ -29,10 +29,43 @@ CaptureController::CaptureController(ICaptureSource* source, IRecorder* recorder
     connect(m_recorder, &IRecorder::finished, this,
             [this](const QString& path, qint64) {
                 emit recordingSaved(path);
-                emit status(tr("Recording saved as %1.").arg(QFileInfo(path).fileName()));
+                // The outcome is now known, so this is the first point at
+                // which a detach- or stall-interrupted recording can be
+                // reported without asserting something not yet true. Exactly
+                // one status message reaches the user either way.
+                if (m_pendingInterruption == RecordingInterruption::Detach) {
+                    m_pendingInterruption = RecordingInterruption::None;
+                    const QString message =
+                        tr("The scope was disconnected. The recording was saved as %1. "
+                           "Reconnect the scope to continue.").arg(QFileInfo(path).fileName());
+                    emit sourceLost(message);
+                    emit status(message);
+                } else if (m_pendingInterruption == RecordingInterruption::Stall) {
+                    m_pendingInterruption = RecordingInterruption::None;
+                    emit status(tr("The video stream stopped, so the recording was ended and "
+                                   "saved as %1. Recording will not resume automatically.")
+                                    .arg(QFileInfo(path).fileName()));
+                } else {
+                    emit status(tr("Recording saved as %1.").arg(QFileInfo(path).fileName()));
+                }
             });
     connect(m_recorder, &IRecorder::failed, this,
-            [this](const QString&, const QString& why) { emit status(why); });
+            [this](const QString&, const QString& why) {
+                if (m_pendingInterruption == RecordingInterruption::Detach) {
+                    m_pendingInterruption = RecordingInterruption::None;
+                    const QString message =
+                        tr("The scope was disconnected. The recording could not be saved: %1")
+                            .arg(why);
+                    emit sourceLost(message);
+                    emit status(message);
+                } else if (m_pendingInterruption == RecordingInterruption::Stall) {
+                    m_pendingInterruption = RecordingInterruption::None;
+                    emit status(tr("The video stream stopped, so the recording was ended. It "
+                                   "could not be saved: %1").arg(why));
+                } else {
+                    emit status(why);
+                }
+            });
 
     m_firstFrameTimer.setSingleShot(true);
     m_firstFrameTimer.setInterval(FirstFrameTimeoutMs);
@@ -48,6 +81,12 @@ CaptureController::CaptureController(ICaptureSource* source, IRecorder* recorder
     m_stallTimer.setInterval(StallTimeoutMs);
     connect(&m_stallTimer, &QTimer::timeout, this, [this] {
         emit status(tr("The video stream stopped. Reconnecting."));
+        // m_source->stop() can re-enter onSourceStopped synchronously (it
+        // does for FakeCaptureSource); this flag is how that handler tells
+        // a stall-initiated stop apart from any other StopReason::Requested,
+        // so a recording in flight gets reported as interrupted rather than
+        // silently ending (spec 10.1's guarantee is not detach-only).
+        m_stallStopping = true;
         m_source->stop();
         m_sawFirstFrame = false;
         m_source->start();
@@ -152,18 +191,26 @@ void CaptureController::onSourceStopped(StopReason reason, const QString& detail
     m_snapshotArmed = false;
 
     const bool wasRecording = isRecording();
-    const QString path = m_pendingRecordingPath;
+    const bool stallInitiated = m_stallStopping;
+    m_stallStopping = false;
 
     // Finalize before reporting anything. A truncated MP4 has no moov atom
-    // and will not open, so the evidence is simply gone (spec 10.1).
-    if (wasRecording) m_recorder->finalizeAndStop();
+    // and will not open, so the evidence is simply gone (spec 10.1). The
+    // outcome (finished/failed) is asynchronous -- IRecorder never
+    // guarantees otherwise -- so whether it succeeded is not yet known here.
+    // Record *why* the recording was cut short and let the finished()/
+    // failed() handler report the outcome once it actually is known.
+    if (wasRecording) {
+        if (reason == StopReason::Detached)
+            m_pendingInterruption = RecordingInterruption::Detach;
+        else if (stallInitiated)
+            m_pendingInterruption = RecordingInterruption::Stall;
+        m_recorder->finalizeAndStop();
+    }
 
-    if (reason == StopReason::Detached) {
-        const QString message = wasRecording
-            ? tr("The scope was disconnected. The recording was saved as %1. "
-                 "Reconnect the scope to continue.").arg(QFileInfo(path).fileName())
-            : tr("The scope was disconnected. Nothing was being recorded. "
-                 "Reconnect the scope to continue.");
+    if (reason == StopReason::Detached && !wasRecording) {
+        const QString message = tr("The scope was disconnected. Nothing was being recorded. "
+                                   "Reconnect the scope to continue.");
         emit sourceLost(message);
         emit status(message);
     }
