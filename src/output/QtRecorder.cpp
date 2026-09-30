@@ -34,6 +34,24 @@ bool QtRecorder::start(const QString& path, const QSize& size, qreal frameRate) 
                 // for evidence that never actually saved is worse than a
                 // truncated file, because the technician isn't told).
                 m_errored = true;
+
+                // isRecording() must go false now, not whenever a caller
+                // next happens to call finalizeAndStop() -- IRecorder's
+                // contract requires it, and CaptureController's detach
+                // handler in particular depends on it: a caller that still
+                // believes a recording is in flight on a recorder that has
+                // already failed defers reporting anything, waiting for an
+                // outcome that was already reported right here and will
+                // never come again. Route through finalizeAndStop() itself
+                // -- the one place that stops the underlying QMediaRecorder
+                // and clears m_recording -- rather than duplicating that
+                // logic here, so a caller that also calls finalizeAndStop()
+                // explicitly later (or one already in flight right now, on
+                // the stack below this handler) finds it already stopped
+                // and safely no-ops: no double stop, and the muxer still
+                // gets closed even though the recording failed.
+                finalizeAndStop();
+
                 emit failed(m_path, tr("Recording failed: %1. The file may be "
                                        "incomplete. Check available storage, "
                                        "then start a new recording.").arg(s));

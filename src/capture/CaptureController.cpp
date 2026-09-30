@@ -175,6 +175,14 @@ void CaptureController::startRecording() {
         emit status(tr("Could not start recording. Nothing was saved."));
         return;
     }
+    // A detach or stall from a *previous* recording may still be waiting
+    // on an outcome here (the finished()/failed() handler that would
+    // normally clear m_pendingInterruption hasn't run yet). This fresh
+    // recording must not inherit that flag: without this reset, this
+    // recording's own, unrelated finished() would later be reported as
+    // "the scope was disconnected. The recording was saved as <this file>"
+    // -- the original false claim, just relocated onto a healthy take.
+    m_pendingInterruption = RecordingInterruption::None;
     m_pendingRecordingPath = path;
     emit status(tr("Recording to %1.").arg(QFileInfo(path).fileName()));
 }

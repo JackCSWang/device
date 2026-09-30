@@ -7,21 +7,53 @@
 #include "output/QtRecorder.h"
 #include "output/SnapshotWriter.h"
 
-// Minimal IRecorder test double used only by
-// stopRecordingWhenNotRecordingNeverReachesTheRecorder(): QtRecorder's own
-// finalizeAndStop() early-returns whenever !m_recording, which is
-// defense-in-depth that would make that test pass even if
-// CaptureController::stopRecording() lost its own "not recording, do
-// nothing" guard. This fake has no such protection, so it is the one thing
-// in this file that can actually distinguish "the guard ran" from
-// "the guard was removed".
-class CountingRecorder : public IRecorder {
+// A scriptable IRecorder test double, used by three tests below to probe
+// CaptureController's own logic in isolation from a real recorder's
+// behaviour and timing:
+//
+//  - stopRecordingWhenNotRecordingNeverReachesTheRecorder(): QtRecorder's
+//    own finalizeAndStop() early-returns whenever !m_recording, which is
+//    defense-in-depth that would make that test pass even if
+//    CaptureController::stopRecording() lost its own "not recording, do
+//    nothing" guard. This double has no such protection, so it is the one
+//    thing in this file that can actually distinguish "the guard ran" from
+//    "the guard was removed".
+//  - errorThenDetachProducesAMessageAndNeverClaimsTheFileWasSaved(): real
+//    QtRecorder error timing cannot be forced deterministically without
+//    also forcing an explicit stop (see test_qt_recorder.cpp's own
+//    Windows-lock workaround for that), so simulateMidRecordingError()
+//    exercises the IRecorder contract (see IRecorder.h) directly: an error
+//    latch must make isRecording() false atomically with failed() firing.
+//  - startRecordingClearsAStrandedInterruptionFlag(): needs a window,
+//    reliably held open, in which a detach/stall's outcome has not yet
+//    arrived. Unlike the real QtRecorder, which this round's fix makes
+//    always emit exactly one of finished()/failed() for a recording that
+//    was genuinely in flight, this double's finalizeAndStop() does not
+//    resolve anything on its own -- callers resolve it explicitly via
+//    simulateFinished()/simulateMidRecordingError(), or leave it open.
+class ScriptedRecorder : public IRecorder {
 public:
-    bool start(const QString&, const QSize&, qreal) override { return true; }
+    bool start(const QString&, const QSize&, qreal) override {
+        m_recording = true;
+        return true;
+    }
     void feed(const QVideoFrame&, qint64) override {}
-    void finalizeAndStop() override { ++finalizeCalls; }
-    bool isRecording() const override { return false; }
+    void finalizeAndStop() override { m_recording = false; ++finalizeCalls; }
+    bool isRecording() const override { return m_recording; }
+
+    void simulateMidRecordingError(const QString& reason) {
+        m_recording = false;
+        emit failed(QString(), reason);
+    }
+
+    void simulateFinished(const QString& path, qint64 durationUs = 1000000) {
+        emit finished(path, durationUs);
+    }
+
     int finalizeCalls = 0;
+
+private:
+    bool m_recording = false;
 };
 
 class TestCaptureController : public QObject {
@@ -252,7 +284,7 @@ private slots:
     // 3 section for the remove/restore transcript).
     void stopRecordingWhenNotRecordingNeverReachesTheRecorder() {
         FakeCaptureSource src;
-        CountingRecorder rec; SnapshotWriter writer;
+        ScriptedRecorder rec; SnapshotWriter writer;
         CaptureController c(&src, &rec, &writer, m_dir.path());
 
         c.begin();
@@ -260,6 +292,95 @@ private slots:
 
         QCOMPARE(rec.finalizeCalls, 0);
         QVERIFY(!c.isRecording());
+    }
+
+    // New Important A (2nd review round): once a recording has failed,
+    // isRecording() must say so immediately, per IRecorder's contract --
+    // otherwise a detach that follows finds isRecording() still true on a
+    // dead recorder, takes the deferred-interruption path, and waits
+    // forever for an outcome that was already reported and will never come
+    // again: total silence rather than a wrong message. Deterministic via
+    // ScriptedRecorder (see its comment above for why this is the right
+    // seam to test at, rather than trying to force a real QtRecorder error
+    // without an explicit stop).
+    void errorThenDetachProducesAMessageAndNeverClaimsTheFileWasSaved() {
+        FakeCaptureSource src; src.setFrameSize({640, 480});
+        ScriptedRecorder rec; SnapshotWriter writer;
+        CaptureController c(&src, &rec, &writer, m_dir.path());
+
+        QSignalSpy savedRec(&c, &CaptureController::recordingSaved);
+        QSignalSpy lost(&c, &CaptureController::sourceLost);
+        QSignalSpy msgs(&c, &CaptureController::status);
+
+        c.begin();
+        c.startRecording();
+        const int msgsBeforeError = msgs.count();   // already has "Recording to ..."
+        src.emitOneFrame();
+        QVERIFY(c.isRecording());
+
+        rec.simulateMidRecordingError(
+            QStringLiteral("Recording failed: disk write error. The file may be incomplete."));
+
+        // Honest immediately -- not "whenever finalizeAndStop() next runs".
+        QVERIFY(!c.isRecording());
+        QVERIFY2(msgs.count() > msgsBeforeError,
+                 "the error itself must be reported, not silence");
+
+        src.injectDetach();
+
+        // Synchronous with injectDetach(): no wait() needed (and none of
+        // the spies here have had a chance to accumulate a stale count
+        // that a wait() would then have to see *another* emission past --
+        // see snapshotWhileRecordingSucceedsForBoth()'s comment for that
+        // QSignalSpy::wait() pitfall).
+        QCOMPARE(lost.count(), 1);   // isRecording() being honest means this
+                                     // is the immediate "nothing was being
+                                     // recorded" branch, not a silent, still-
+                                     // pending Detach interruption.
+        QCOMPARE(savedRec.count(), 0);
+        for (const auto& call : msgs)
+            QVERIFY(!call.at(0).toString().contains(QStringLiteral("was saved as")));
+    }
+
+    // New Important B (2nd review round): m_pendingInterruption must not
+    // survive past the recording it was set for. ScriptedRecorder's
+    // finalizeAndStop() deliberately does not resolve the outcome on its
+    // own, holding the "still pending" window open long enough to prove
+    // startRecording() clears it for the next, unrelated recording.
+    void startRecordingClearsAStrandedInterruptionFlag() {
+        FakeCaptureSource src; src.setFrameSize({640, 480});
+        ScriptedRecorder rec; SnapshotWriter writer;
+        CaptureController c(&src, &rec, &writer, m_dir.path());
+
+        QSignalSpy lost(&c, &CaptureController::sourceLost);
+        QSignalSpy savedRec(&c, &CaptureController::recordingSaved);
+        QSignalSpy msgs(&c, &CaptureController::status);
+
+        c.begin();
+        c.startRecording();
+        src.emitOneFrame();
+        src.injectDetach();
+        // wasRecording was true, so onSourceStopped set
+        // m_pendingInterruption to Detach and called finalizeAndStop() --
+        // whose outcome, by this double's design, never arrives on its
+        // own. The message is deferred, waiting.
+        QCOMPARE(lost.count(), 0);
+        QVERIFY(!c.isRecording());
+
+        // Reconnect and start a second, completely unrelated recording.
+        c.begin();
+        c.startRecording();
+        const QString newPath = m_dir.filePath(QStringLiteral("healthy-take.mp4"));
+        rec.simulateFinished(newPath);
+
+        // This recording's own completion must be reported plainly, not
+        // hijacked by the stale Detach flag from the earlier, already-gone
+        // recording.
+        QCOMPARE(savedRec.count(), 1);
+        QCOMPARE(savedRec.at(0).at(0).toString(), newPath);
+        QCOMPARE(lost.count(), 0);
+        for (const auto& call : msgs)
+            QVERIFY(!call.at(0).toString().contains(QStringLiteral("disconnected")));
     }
 };
 
