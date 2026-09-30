@@ -469,6 +469,55 @@ private slots:
         QVERIFY(h->session->needsDeviceChoice());
     }
 
+    // N1 review follow-up: changeScope() must not orphan a recording in
+    // flight. The first version disconnected and deleteLater()'d the
+    // controller/recorder/source outright, which severed the connections
+    // that report a recording's outcome before finished()/failed() could
+    // ever arrive -- risking a truncated MP4 with no moov atom (spec 10.1)
+    // and telling the user nothing about the take they just lost.
+    //
+    // Asserts, in order: the pipeline is NOT torn down the instant
+    // changeScope() is called (finalizing is asynchronous -- IRecorder
+    // never guarantees otherwise); once the recorder's outcome arrives, the
+    // sticky outcome line names the file *before* the picker state is
+    // entered; and only then does the session actually tear down and ask
+    // for a scope again.
+    //
+    // Sensitivity: replace changeScope()'s recording branch with the ad hoc
+    // disconnect()+deleteLater() teardown (no wait for the outcome) and
+    // this fails -- lastOutcome() never names the file, because the
+    // recordingSaved connection was severed before resolveFinished() could
+    // reach it.
+    void changeScopeFinalizesARecordingInFlightBeforeTearingDown() {
+        auto h = makeHarness();
+        h->registry.attach(QStringLiteral("scope-1"), QStringLiteral("HD camera"));
+        h->session->start();
+        h->source()->emitOneFrame();
+
+        h->session->toggleRecording();
+        QVERIFY(h->session->isRecording());
+        h->source()->emitOneFrame();
+
+        const QString path = h->recorder()->path();
+        QVERIFY(!path.isEmpty());
+
+        h->session->changeScope();
+
+        // Must still be waiting on the outcome -- not torn down yet.
+        QVERIFY(h->session->hasDevice());
+        QVERIFY(!h->session->needsDeviceChoice());
+        QVERIFY(h->session->status()->lastOutcome().isEmpty());
+
+        // The asynchronous outcome arrives now.
+        h->recorder()->resolveFinished();
+
+        const QString fileName = QFileInfo(path).fileName();
+        QCOMPARE(h->session->status()->lastOutcome(),
+                 QStringLiteral("Last saved: %1").arg(fileName));
+        QVERIFY(!h->session->hasDevice());
+        QVERIFY(h->session->needsDeviceChoice());
+    }
+
     // The device line must not be a write-once field: a transient error
     // followed by a healthy pipeline has to clear.
     void aTransientErrorDoesNotPersistOverAHealthyPipeline() {

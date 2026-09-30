@@ -240,6 +240,14 @@ void CaptureSession::onSourceLost(StopReason reason) {
 
 void CaptureSession::teardownPipeline() {
     m_teardownQueued = false;
+    // Defensive only: this path (a real detach/error) and changeScope()'s
+    // finalize-then-teardown path are not expected to overlap, but if a
+    // detach ever raced a pending changeScope() finalize, disconnecting the
+    // recorder below (a few lines down) would silently drop
+    // finishChangeScope()'s connection along with everything else's. Clear
+    // the flag here too so it cannot linger true against a pipeline that no
+    // longer exists.
+    m_changeScopePending = false;
     if (!m_controller && !m_source && !m_recorder) return;   // already torn down
 
     const QString lostId = m_openDeviceId;
@@ -338,8 +346,42 @@ void CaptureSession::retry() {
 }
 
 void CaptureSession::changeScope() {
+    if (m_controller && m_controller->isRecording()) {
+        // A recording is in flight. It must be finalized -- and its outcome
+        // reported -- before anything is disconnected or destroyed;
+        // otherwise the recorder is orphaned mid-finalize, risking a
+        // truncated MP4 with no moov atom (spec 10.1: "the evidence is
+        // simply gone"), and the connections that report the outcome are
+        // severed before finished()/failed() can ever arrive.
+        //
+        // stopRecording() is exactly what the "Stop recording" button
+        // calls: it drives m_recorder->finalizeAndStop() the normal way,
+        // with m_source untouched, so CaptureController's own
+        // finished()/failed() handler runs its ordinary (non-interruption)
+        // path and reports "Recording saved as ..." through the
+        // recordingSaved/status connections openDevice() already wired up.
+        // finishChangeScope() is connected *after* those, so it always
+        // runs once the outcome has already reached the status model.
+        if (!m_changeScopePending) {
+            m_changeScopePending = true;
+            connect(m_recorder.get(), &IRecorder::finished, this, &CaptureSession::finishChangeScope);
+            connect(m_recorder.get(), &IRecorder::failed, this, &CaptureSession::finishChangeScope);
+            m_controller->stopRecording();
+        }
+        return;
+    }
+    teardownForChangeScope();
+}
+
+void CaptureSession::finishChangeScope() {
+    m_changeScopePending = false;
+    teardownForChangeScope();
+}
+
+void CaptureSession::teardownForChangeScope() {
     // Synchronous, unlike teardownPipeline(): this runs on a direct user
-    // action, not from inside a signal handler on the objects being
+    // action (or its deferred continuation once a recording's outcome is
+    // known), not from inside a signal handler on the objects being
     // destroyed, so there is nothing further up the call stack that still
     // needs them alive.
     if (m_controller || m_source || m_recorder) {

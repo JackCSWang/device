@@ -100,6 +100,9 @@ public:
     // attach() in the field once a wrong device had auto-opened. Must be
     // reachable whenever more than one device is present, not only when
     // nothing is open.
+    //
+    // If a recording is in flight, this does NOT tear the pipeline down
+    // immediately: see finishChangeScope().
     void changeScope();
 
 signals:
@@ -117,6 +120,21 @@ private:
     void openPreferredDevice();
     void openDevice(const ScopeDevice& device);
     void teardownPipeline();
+    // changeScope() review fix: a recording in flight must be finalized --
+    // via CaptureController::stopRecording(), exactly the path the "Stop
+    // recording" button uses -- and its outcome reported through the
+    // connections openDevice() already wired up, before anything is torn
+    // down. Reusing the disconnect()+deleteLater() teardown while a
+    // recording was still finalizing severed those connections out from
+    // under it: the outcome message never fired, and the recorder was
+    // orphaned before finalizeAndStop() could guarantee the file's moov
+    // atom was written (spec 10.1). finishChangeScope() is the deferred
+    // continuation, connected to the recorder's finished()/failed() only
+    // while a finalize is outstanding; teardownForChangeScope() is the
+    // teardown itself, run either immediately (nothing was recording) or
+    // once the outcome is known.
+    void finishChangeScope();
+    void teardownForChangeScope();
     void setCameraAccessDenied(bool denied);
     void setNeedsChoice(bool needs);
     bool deviceStillEnumerated(const QString& id) const;
@@ -158,5 +176,10 @@ private:
     bool m_cameraAccessDenied = false;
     bool m_needsChoice = false;
     bool m_teardownQueued = false;
+    // Set while changeScope() is waiting on a recording it asked to
+    // finalize; guards against a double-click registering the
+    // finished()/failed() connection twice. Cleared by finishChangeScope(),
+    // and defensively by teardownPipeline() too -- see its own comment.
+    bool m_changeScopePending = false;
     QSize m_frameSize;
 };
