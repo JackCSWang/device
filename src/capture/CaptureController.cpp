@@ -3,6 +3,7 @@
 #include "output/SnapshotWriter.h"
 #include "storage/CaptureNaming.h"
 #include "storage/DiskPolicy.h"
+#include "device/StopClassification.h"
 #include "storage/OutputLocation.h"
 #include <QDateTime>
 #include <QDir>
@@ -155,17 +156,16 @@ void CaptureController::begin() {
     OutputLocation::ensureExists(m_outputDir);
     m_sawFirstFrame = false;
     if (!m_source->start()) {
-#ifdef Q_OS_LINUX
-        // On Linux, camera nodes are usually root:video 0660, so a user not
-        // in the video group gets exactly this failure with no indication
-        // why. This is the one place root is unavoidable, so the app must
-        // name the fix rather than leave the technician guessing (spec §4).
-        if (!QFileInfo(QStringLiteral("/dev/video0")).isReadable()) {
-            emit status(tr("No permission to read the camera device. Nothing was saved. "
-                           "Run: sudo usermod -aG video $USER   then log out and back in."));
-            return;
-        }
-#endif
+        // Reachable only for a source whose *synchronous* open fails --
+        // which, for QtCaptureSource, effectively never happens: it
+        // returns QCamera::isAvailable() immediately after start(), and
+        // activation is asynchronous, so permission denials, busy devices
+        // and backend failures all arrive later via stopped(Error). The
+        // Linux EACCES diagnosis and the "could not open" wording used to
+        // live here together, which made both of them dead code. The
+        // diagnosis moved to onSourceStopped's Error path; this stays as
+        // the honest last resort for a source that really does fail
+        // up front (see ICaptureSource::start()'s contract).
         emit status(tr("Could not open the scope. Nothing was saved. "
                        "Check the cable, then reconnect the device."));
         return;
@@ -308,8 +308,17 @@ void CaptureController::onSourceStopped(StopReason reason, const QString& detail
         const QString what = (reason == StopReason::Detached)
             ? tr("The scope was disconnected.")
             : tr("The scope stopped.");
-        QString message = tr("%1 Nothing was being recorded. Reconnect the scope to "
-                             "continue.").arg(what);
+        // Spec 10.3's Linux EACCES row. It used to be checked on the
+        // `!m_source->start()` path, which activation's asynchrony makes
+        // unreachable, and against a hardcoded /dev/video0 -- so a real
+        // permission problem on a scope enumerating as /dev/video1 (any
+        // machine with a built-in webcam) produced the generic wording.
+        // The Error path is where a denial actually surfaces, and
+        // deviceNode() is the node the device actually has.
+        QString message = permissionHintForError(reason);
+        if (message.isEmpty())
+            message = tr("%1 Nothing was being recorded. Reconnect the scope to "
+                         "continue.").arg(what);
 
         // The driver's detail names the real cause -- another app holding
         // the device, a bandwidth failure, a vanished node -- and this is
@@ -324,4 +333,29 @@ void CaptureController::onSourceStopped(StopReason reason, const QString& detail
         emit status(message);
         emit sourceLost(message, reason);
     }
+}
+
+
+QString CaptureController::permissionHintForError(StopReason reason) const {
+    const QString node = m_source->deviceNode();
+    // Windows and macOS device ids are opaque handles, not paths, so there
+    // is nothing to stat. Their equivalent -- a privacy block -- is
+    // handled by CameraAccessPolicy::activationFailureMayBeAccessDenied().
+    if (node.isEmpty() || !node.startsWith(QLatin1Char('/'))) return {};
+
+    const QFileInfo info(node);
+    // The decision itself is pure and lives in StopClassification, where it
+    // has unit tests that run on every platform -- including this project's
+    // only available one, which cannot execute the Linux branch at all.
+    if (!StopClassification::isDeviceNodePermissionProblem(
+            reason, info.exists(), info.isReadable()))
+        return {};
+
+    // Camera nodes are usually root:video 0660, so a user not in the video
+    // group gets exactly this failure with no indication why. This is the
+    // one place root is unavoidable, so the app must name the fix rather
+    // than leave the technician guessing (spec 4).
+    return tr("No permission to read the camera device %1. Nothing was saved. "
+              "Run: sudo usermod -aG video $USER   then log out and back in.")
+        .arg(node);
 }

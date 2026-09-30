@@ -74,6 +74,11 @@ private:
     void onSourceStopped(StopReason reason, const QString& detail);
     QString reserveName(const QString& extension) const;
 
+    // Spec 10.3's Linux `EACCES` row: the literal `usermod -aG video` fix,
+    // named for the device node the scope actually enumerated as. Empty
+    // string when this is not that failure (and always, off Linux).
+    QString permissionHintForError(StopReason reason) const;
+
     ICaptureSource* m_source;
     IRecorder* m_recorder;
     SnapshotWriter* m_writer;

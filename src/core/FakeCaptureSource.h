@@ -3,6 +3,7 @@
 #include <QColor>
 #include <QImage>
 #include <QVideoFrameFormat>
+#include <utility>
 
 // Synthetic source for tests and CI. Emits a flat frame in a known colour
 // that advances each frame, so a consumer can assert exact pixels.
@@ -29,6 +30,12 @@ public:
     void setFrameSize(QSize size) { m_size = size; }
     void setPixelFormat(QVideoFrameFormat::PixelFormat f) { m_pixelFormat = f; }
     void setDeliverFrames(bool on) { m_deliver = on; }
+
+    // Lets a test drive ICaptureSource::deviceNode(), so spec 10.3's Linux
+    // EACCES decision can be exercised (in both directions) from a
+    // platform that has no /dev/video nodes at all.
+    void setDeviceNode(QString node) { m_deviceNode = std::move(node); }
+    QString deviceNode() const override { return m_deviceNode; }
 
     // How many times selectNextFormat() may succeed before the chain is
     // exhausted. Lets the watchdog's fallback path be tested end to end.
@@ -57,4 +64,5 @@ private:
     int m_fallbacksLeft = 0;
     int m_fallbacksUsed = 0;
     qint64 m_tsUs = 0;
+    QString m_deviceNode;
 };

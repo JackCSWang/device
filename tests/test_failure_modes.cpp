@@ -129,6 +129,35 @@ private slots:
         QVERIFY(msg.contains(QStringLiteral("OtherApp")));
         QVERIFY(!c.isRecording());
     }
+
+    // Important 2, the no-false-positive half. The Linux EACCES diagnosis
+    // now runs on the Error path (where a denial actually surfaces) against
+    // the node the device really enumerated as -- not on the unreachable
+    // `!start()` path against a hardcoded /dev/video0. A node that is
+    // simply absent must not produce a permissions lecture; the technician
+    // gets the real cause instead.
+    //
+    // Sensitivity: drop the `nodeExists` term from
+    // StopClassification::isDeviceNodePermissionProblem() and this fails,
+    // because QFileInfo("/dev/video7").isReadable() is false for a path
+    // that does not exist -- which is every path, on this platform.
+    void anAbsentDeviceNodeDoesNotProduceAPermissionsLecture() {
+        FakeCaptureSource src;
+        src.setDeviceNode(QStringLiteral("/dev/video7"));
+        QtRecorder rec; SnapshotWriter writer;
+        CaptureController c(&src, &rec, &writer, m_dir.path());
+
+        QSignalSpy lost(&c, &CaptureController::sourceLost);
+        c.begin();
+        src.emitOneFrame();
+        emit src.stopped(StopReason::Error, QStringLiteral("device in use by OtherApp"));
+
+        QTRY_COMPARE_WITH_TIMEOUT(lost.count(), 1, 3000);
+        const QString msg = lost.at(0).at(0).toString();
+        QVERIFY2(!msg.contains(QStringLiteral("usermod")), qPrintable(msg));
+        QVERIFY(msg.contains(QStringLiteral("OtherApp")));
+        QCOMPARE(lost.at(0).at(1).value<StopReason>(), StopReason::Error);
+    }
 };
 
 QTEST_MAIN(TestFailureModes)

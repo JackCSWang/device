@@ -26,6 +26,11 @@ public:
 
     QStringList formatDescriptions() const override;
 
+    // On Linux (V4L2) QCameraDevice::id() *is* the `/dev/videoN` path, which
+    // is what spec 10.3's EACCES row needs. On Windows and macOS it is an
+    // opaque handle; the caller checks for a path before using it.
+    QString deviceNode() const override { return QString::fromUtf8(m_device.id()); }
+
 private:
     void applySelectedFormat();
 

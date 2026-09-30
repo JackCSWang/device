@@ -97,6 +97,35 @@ private slots:
         QCOMPARE(StopClassification::forCameraError(true), StopReason::Error);
         QCOMPARE(StopClassification::forCameraError(false), StopReason::Detached);
     }
+
+    // Must-fix minor 4, part 2 / Important 2: spec 10.3's Linux `EACCES`
+    // decision. This used to be an `#ifdef Q_OS_LINUX` block inside
+    // CaptureController, on the `!m_source->start()` path -- unreachable,
+    // because activation is asynchronous -- and against a hardcoded
+    // /dev/video0. Pure and here, it is testable on the only platform this
+    // project can actually build for.
+    void anUnreadableDeviceNodeOnAnErrorIsAPermissionProblem() {
+        QVERIFY(StopClassification::isDeviceNodePermissionProblem(
+            StopReason::Error, /*nodeExists=*/true, /*nodeReadable=*/false));
+    }
+
+    // The mirror image of Important 1's bug: a detached device's node is
+    // gone, and "not readable" for a path that no longer exists would turn
+    // every ordinary unplug into a permissions lecture.
+    void aDetachIsNeverAPermissionProblem() {
+        QVERIFY(!StopClassification::isDeviceNodePermissionProblem(
+            StopReason::Detached, true, false));
+        QVERIFY(!StopClassification::isDeviceNodePermissionProblem(
+            StopReason::Requested, true, false));
+    }
+
+    // A node that is absent, or present and readable, is some other fault.
+    void anAbsentOrReadableNodeIsNotAPermissionProblem() {
+        QVERIFY(!StopClassification::isDeviceNodePermissionProblem(
+            StopReason::Error, /*nodeExists=*/false, /*nodeReadable=*/false));
+        QVERIFY(!StopClassification::isDeviceNodePermissionProblem(
+            StopReason::Error, true, /*nodeReadable=*/true));
+    }
 };
 
 QTEST_MAIN(TestCameraAccessPolicy)

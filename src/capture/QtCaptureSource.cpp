@@ -1,4 +1,5 @@
 #include "capture/QtCaptureSource.h"
+#include "device/StopClassification.h"
 #include <QDateTime>
 #include <QMediaDevices>
 #include <algorithm>
@@ -70,10 +71,13 @@ bool QtCaptureSource::start() {
     connect(m_camera.get(), &QCamera::errorOccurred, this,
             [this](QCamera::Error error, const QString& detail) {
                 Q_UNUSED(error); // always CameraError -- see isDeviceStillPresent above
-                if (isDeviceStillPresent(m_device.id()))
-                    emit stopped(StopReason::Error, detail);
-                else
-                    emit stopped(StopReason::Detached, detail);
+                // The mapping itself is pure and lives in
+                // StopClassification, where it has unit tests that need no
+                // hardware; this lambda's only job is to ask the one
+                // question the decision rests on.
+                emit stopped(StopClassification::forCameraError(
+                                 isDeviceStillPresent(m_device.id())),
+                             detail);
             });
 
     m_camera->start();
