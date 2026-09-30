@@ -1,13 +1,16 @@
 # Cross-Platform Microscope Capture App — Design
 
 **Date:** 2026-09-30
-**Status:** Approved design, pending implementation plan
+**Status:** Approved design
+**Revision 2 (2026-09-30):** Android dropped. Targets are Windows, macOS, and
+Linux only. This removed the project's dominant technical risk; §5, §6, §7,
+§10, and §12 changed materially. Revision 1 history is preserved in §16.
 
 ## 1. Purpose
 
 A field-inspection tool. A technician carries a USB-C UVC microscope to a
-site, connects it to an Android tablet or a laptop, inspects a sample on a
-live view, and captures still images and video as evidence.
+site, connects it to a laptop, inspects a sample on a live view, and captures
+still images and video as evidence.
 
 Priorities, in order: portability, offline operation, and not needing IT
 involvement to install or run.
@@ -30,6 +33,8 @@ involvement to install or run.
 - Multiple simultaneous scopes
 - Login, user accounts, or any network dependency
 
+**Out of scope permanently:** phones and tablets. See §3.
+
 ## 3. Platform targets
 
 | Platform | Status |
@@ -37,26 +42,37 @@ involvement to install or run.
 | Windows | Supported |
 | macOS | Supported |
 | Linux | Supported |
-| Android | Supported |
+| Android | **Excluded** |
 | iOS | **Excluded** |
 
-### 3.1 Why iOS is excluded
+### 3.1 Why there is no mobile version
 
-iOS provides no API for reading external USB cameras. iPadOS 17+ can open
-UVC devices over USB-C, but iPhone cannot, at any price. Since the scope is
-a USB-C UVC device, "runs on iPhone" and "reads this microscope" are
-mutually exclusive.
+**iOS** provides no API for reading external USB cameras. iPadOS 17+ can open
+UVC devices over USB-C, but iPhone cannot, at any price. Since the scope is a
+USB-C UVC device, "runs on iPhone" and "reads this microscope" are mutually
+exclusive.
 
-This was raised and accepted deliberately. Android replaced iOS as the
-mobile target. Revisiting iOS would require either a Wi-Fi microscope or
-turning the phone into a remote viewer for a desktop that holds the device
-— both are new projects, not variations of this one.
+**Android** was the mobile target in revision 1 and was dropped by decision,
+not by technical obstacle. It was, however, the expensive target: Android
+ships no usable path to an external UVC camera, because its `camera2` API
+enumerates external USB cameras only on some devices at each OEM's
+discretion. The reliable route would have been claiming the device through
+the USB Host API and decoding the stream in native code via `libuvc`/`libusb`
+behind a JNI bridge, plus a second video encoder built on `MediaCodec`.
+
+That work was estimated at roughly 60% of total project effort and nearly all
+of its technical risk. Dropping it is the single largest simplification
+available to this project — see §6.
+
+**Consequence for the field story:** captures happen on a laptop, not a
+tablet. A Windows 2-in-1 remains plausible field hardware, which is why touch
+input is still supported (§9), but no mobile operating system is a target.
 
 ## 4. Non-functional requirements
 
 1. **No elevated privileges.** The app installs and runs without admin,
-   root, or sudo on all four platforms. No kernel driver, no system
-   service, no elevated helper process, ever.
+   root, or sudo on all three platforms. No kernel driver, no system service,
+   no elevated helper process, ever.
 2. **Fully offline.** No network call is required for any feature.
 3. **No admin-installed dependencies.** Everything ships in the bundle.
 
@@ -67,80 +83,126 @@ service violates the product premise.
 **Known exception:** on a locked-down Linux install the user may lack access
 to `/dev/video*`, whose one-time fix (`usermod -aG video`) needs root. The
 app must detect this and display the exact command rather than failing
-opaquely. See 10.3.
+opaquely. See §10.3.
 
 ## 5. Technology choices
 
 | Decision | Choice | Rationale |
 |---|---|---|
-| Framework | Qt 6 | Only option giving capture *and* H.264 recording on all 3 desktop platforms from one API, with no native code |
-| Language | C++17 | Forced: PySide6 has no viable Android deployment path |
-| UI toolkit | Qt Quick / QML | Forced: Qt Widgets is poor on touch, and pinch-to-zoom is the core interaction |
-| Licence | LGPLv3 | Acceptable for internal use. `androiddeployqt` bundles Qt as shared libraries, so LGPL is satisfied. **Revisit if this becomes a sold product** — static linking on Android would push toward a commercial licence |
+| Framework | Qt 6 | One API — `QCamera` plus `QMediaRecorder` — covers capture *and* H.264 recording on all three platforms with no native code |
+| Language | C++17 | A choice, not a constraint. See §5.1 |
+| UI toolkit | Qt Quick / QML | A choice, not a constraint. See §5.2 |
+| Licence | LGPLv3 | Satisfied comfortably: `windeployqt`, `macdeployqt`, and `linuxdeploy` all ship Qt as shared libraries |
 
-### 5.1 Approaches considered and rejected
+### 5.1 C++ is no longer forced
 
-- **Flutter + native media core.** Nicer Android UI, but requires writing
-  Media Foundation, AVFoundation, and V4L2 capture *plus* a desktop
-  encoding stack by hand. Large cost for a four-feature app.
-- **Web stack (Tauri/Electron) + separate native Android app.** Fastest
-  desktop route via `getUserMedia`, but Chrome on Android does not expose
-  external UVC cameras, so Android needs a full separate implementation.
-  Two codebases is a bad trade here.
+In revision 1, C++ was forced: PySide6 has no viable Android deployment
+path. With Android gone, **Python plus PySide6 would now work on all three
+targets**, and that should be stated rather than quietly ignored.
+
+C++ is kept anyway, for one reason that survives the change: requirement 4.1
+demands a zero-admin portable artifact, and shipping a Python app that way
+means PyInstaller or Nuitka, a bundled interpreter, and a noticeably larger
+and more fragile bundle. A single native binary with Qt libraries beside it
+is the simpler thing to hand someone who cannot run an installer.
+
+This is a preference with a reason, not a requirement. If the team's skills
+point at Python, the architecture in §7 transfers unchanged.
+
+### 5.2 QML is no longer forced
+
+In revision 1, QML was forced: Qt Widgets is poor on touch, and the Android
+tablet was a primary target. With no mobile target, Widgets became viable.
+
+QML is kept because Qt Quick's input handlers give pinch, wheel, and drag
+zoom from one code path, and Windows 2-in-1 devices are plausible field
+hardware. The gain over Widgets is modest; the cost of switching now is a
+rewrite of the UI task for no functional difference.
+
+### 5.3 Approaches considered and rejected
+
+Revision 1 chose Qt partly because it was the only framework covering all
+four platforms including Android in one codebase. **That argument is now
+void, so the decision was re-examined rather than inherited.**
+
+- **Web stack (Tauri or Electron) + `getUserMedia`.** This became
+  substantially more attractive when Android was dropped: `getUserMedia`,
+  `MediaRecorder`, and a canvas would deliver all four features on three
+  desktops with essentially no native code. Rejected because this app
+  produces evidence, and the web media stack gives away the control that
+  matters for it: `MediaRecorder` defaults to WebM/VP8 with patchy and
+  platform-dependent H.264/MP4 support, explicit format negotiation
+  (§8.5) is not exposed, precise presentation timestamps (§8.4) are not
+  controllable, and Tauri's system WebView means WebKitGTK on Linux, where
+  codec and capture support varies by distribution. Electron additionally
+  bundles roughly 150 MB of Chromium into a tool whose premise is a small
+  portable artifact.
+- **Flutter + native media core.** Its advantage was a better mobile UI,
+  which is now worth nothing. It still requires writing Media Foundation,
+  AVFoundation, and V4L2 capture plus a desktop encoding stack by hand.
+  Strictly worse than Qt here.
 - **libuvc on every platform.** Not viable. Windows and macOS bind UVC
   devices to their in-box class driver; libusb would require detaching it
   and installing a replacement driver, which breaks requirement 4.1.
 
-## 6. The dominant risk
+Qt survives the re-examination on a narrower but sufficient basis: it is the
+only option that gives evidence-grade control of format, timestamps, and
+container while requiring no native code and no runtime beyond its own
+shared libraries.
 
-Reading a UVC camera is nearly free on desktop and genuinely hard on
-Android.
+## 6. Risk profile
 
-Windows, macOS, and Linux each ship a UVC class driver and expose the
-device through a standard capture API. Android does not. Its `camera2` API
-enumerates external USB cameras only on some devices, at each OEM's
-discretion, which is not shippable. The reliable route is claiming the
-device through the USB Host API and decoding the stream in native code via
-`libuvc`/`libusb` behind a JNI bridge.
+Revision 1 named Android as the one assumption capable of invalidating the
+schedule, and required a spike before any production code. **That risk is
+gone, and with it the spike.** No remaining item in this project can
+invalidate its schedule.
 
-**Android is roughly 60% of total effort and nearly all technical risk.**
-Any plan treating the four platforms as equal work is wrong.
+What is left, in order of how likely it is to cause trouble:
 
-**This must be de-risked first.** Prove frame acquisition from the actual
-scope on an actual target tablet before building UI on top of it. It is the
-one assumption capable of invalidating the whole schedule.
+1. **Code signing and notarization** (§12). An unsigned macOS app is blocked
+   by Gatekeeper outright. This is an organisational dependency — an Apple
+   Developer account and a Windows certificate — not an engineering problem,
+   which means it can block a release while looking like nothing is wrong.
+   Start it early.
+2. **USB isochronous bandwidth on shared hubs** (§10.2). Technically
+   understood and mitigated by design, but it produces a black screen with
+   no error, so it costs debugging time whenever it appears.
+3. **Qt Multimedia backend variance across Linux distributions.** Qt 6.5+
+   defaults to its FFmpeg backend, which makes behaviour far more consistent
+   than the old GStreamer path, but Linux remains the platform where a
+   distribution can surprise you. The manual test matrix (§11) covers it.
+
+None of these are reasons to delay building. All three are reasons to test on
+real hardware early rather than at the end.
 
 ## 7. Architecture
 
-The system turns on one seam: **two capture backends behind a single
-interface.**
-
 ```
-        +----------- Desktop -----------+   +------- Android -------+
-        | QCamera + QMediaCaptureSession|   | USB Host API (JNI)    |
-        | Win: MF  mac: AVF  Linux: V4L2|   | libuvc / libusb (NDK) |
-        +---------------+---------------+   +-----------+-----------+
-                        |                               |
-                 +------v-------------------------------v------+
-                 |            ICaptureSource                   |
-                 |     frameReady(QVideoFrame) -- full res     |
-                 +------+-------------------------------+------+
-                        |                               |
-            +-----------v----------+       +------------v-----------+
-            | view                 |       | output                 |
-            | zoom + pan           |       | snapshot writer        |
-            | -> QML VideoOutput   |       | recorder               |
-            |                      |       |                        |
-            | NEVER writes files   |       | NEVER sees zoom state  |
-            +----------------------+       +------------------------+
+                 +--------------- Desktop ----------------+
+                 |     QCamera + QMediaCaptureSession     |
+                 |  Win: MF   macOS: AVF   Linux: V4L2    |
+                 +-------------------+--------------------+
+                                     |
+                 +-------------------v--------------------+
+                 |             ICaptureSource             |
+                 |    frameReady(QVideoFrame) -- full res |
+                 +------+--------------------------+------+
+                        |                          |
+            +-----------v----------+   +-----------v-----------+
+            | view                 |   | output                |
+            | zoom + pan           |   | snapshot writer       |
+            | -> QML VideoOutput   |   | recorder              |
+            |                      |   |                       |
+            | NEVER writes files   |   | NEVER sees zoom state |
+            +----------------------+   +-----------------------+
 ```
 
 ### 7.1 Modules
 
 | Module | Responsibility | Depends on |
 |---|---|---|
-| `device` | Enumerate scopes, watch attach/detach, hold permissions | platform APIs |
-| `capture` | `ICaptureSource`; `QtCaptureSource`, `UvcCaptureSource` | `device` |
+| `device` | Enumerate scopes, watch attach/detach | Qt Multimedia |
+| `capture` | `ICaptureSource`; `QtCaptureSource`, `FakeCaptureSource` | `device` |
 | `view` | Zoom/pan transform, render to QML | nothing — consumes frames |
 | `output` | JPEG snapshot writer, MP4 recorder | nothing — consumes frames |
 | `storage` | Output directory, timestamped naming, free-space checks | platform dirs |
@@ -155,28 +217,35 @@ physically incapable of being cropped by accident. The decision cannot rot
 through later edits.
 
 **`view` and `output` do not know cameras exist.** They consume frames.
-This is what makes section 11 possible.
+This is what makes §11 possible.
 
-### 7.3 Platform-specific surface
+### 7.3 Why `ICaptureSource` remains
 
-After the refinement in 8.1, only two things differ per platform:
+With one real implementation, the seam is no longer a platform-abstraction
+boundary, and dropping it would be a defensible simplification.
 
-1. Frame acquisition
-2. Video encoding
+It is kept for testability. `FakeCaptureSource` sits at the same seam and
+emits a synthetic pattern with failure injection, which is what allows every
+row of §10.3 — detach mid-recording included — to be an automated test
+instead of someone unplugging a cable on three machines. That justification
+is independent of how many platforms exist.
 
-Everything else, snapshots included, is shared code.
+### 7.4 Platform-specific surface: none
+
+Revision 1 had two things differing per platform: frame acquisition and video
+encoding. **Both are now handled by Qt on all three targets.** There is no
+per-platform code in this design beyond packaging scripts and one Linux
+permission hint (§4).
 
 ## 8. Data flow and threading
 
-### 8.1 Snapshots are platform-independent
+### 8.1 Snapshots
 
-A snapshot is: current `QVideoFrame` -> `QImage` -> JPEG. Pure Qt,
-identical on every platform.
+A snapshot is: current `QVideoFrame` → `QImage` → JPEG.
 
-`QImageCapture` is deliberately **not** used on desktop. It can switch the
-device into a separate still-image pipeline; the scope has exactly one
-stream, so grabbing the live frame is both more deterministic and yields
-one implementation instead of two.
+`QImageCapture` is deliberately **not** used. It can switch the device into a
+separate still-image pipeline; the scope has exactly one stream, so grabbing
+the live frame is more deterministic.
 
 ### 8.2 Threads
 
@@ -184,7 +253,7 @@ one implementation instead of two.
 |---|---|---|
 | Capture | USB device, format negotiation | Never blocks on disk or UI |
 | UI | QML render, zoom transform | Only reads the latest frame |
-| Encoder | `QMediaRecorder` (desktop, internal) / `MediaCodec` (Android, JNI) | Fed from capture thread |
+| Encoder | `QMediaRecorder`, internally | Fed from capture thread |
 | Writer pool | JPEG encode + file write | Short-lived `QThreadPool` tasks |
 
 JPEG-encoding a full-resolution frame takes tens of milliseconds. On the UI
@@ -194,13 +263,13 @@ drops frames. Hence the pool.
 ### 8.3 Frame ownership rule
 
 `QVideoFrame` is reference-counted, but **the underlying buffer belongs to
-the capture backend and is recycled.** Therefore anything leaving the
-capture thread's stack must be deep-copied first: map the frame, clone into
-a `QImage`, then hand that off.
+the capture backend and is recycled.** Therefore anything leaving the capture
+thread's stack must be deep-copied first: map the frame, clone into a
+`QImage`, then hand that off.
 
 This is a spec-level rule, not a code-review aspiration. Violating it
-produces snapshots that are half one frame and half the next,
-intermittently, under load only.
+produces snapshots that are half one frame and half the next, intermittently,
+under load only.
 
 ### 8.4 Fan-out and backpressure
 
@@ -214,24 +283,24 @@ capture thread --> QVideoFrame (+ capture timestamp)
    drops freely, no queue         +- recorder: fed with PTS
 ```
 
-**Display path drops stale frames deliberately.** An unbounded queue on a
-slow tablet becomes latency, then a crash.
+**Display path drops stale frames deliberately.** An unbounded queue becomes
+latency, then a crash.
 
 **Recording path is timestamp-driven.** Every frame carries its capture
-timestamp, used as the encoder PTS; video is written variable-frame-rate.
-If the encoder falls behind on weak hardware the result is a lower frame
-rate that still plays at correct wall-clock speed, rather than a file that
-plays fast, which for inspection evidence would be actively misleading.
+timestamp, used as the encoder PTS; video is written variable-frame-rate. If
+the encoder falls behind on weak hardware the result is a lower frame rate
+that still plays at correct wall-clock speed, rather than a file that plays
+fast, which for inspection evidence would be actively misleading.
 
 ### 8.5 Sequence
 
 1. `device` enumerates; auto-open if exactly one scope, otherwise prompt
-2. Negotiate format down a preference list: MJPEG 1080p -> YUY2 720p ->
+2. Negotiate format down a preference list: MJPEG 1080p → YUY2 720p →
    first supported
 3. Frames flow; `view` renders; `output` idle
-4. **Snapshot:** arm flag -> next frame deep-copied -> writer pool -> JPEG
-   -> UI confirms the filename
-5. **Record:** open encoder -> feed frames with PTS -> stop -> finalize
+4. **Snapshot:** arm flag → next frame deep-copied → writer pool → JPEG →
+   UI confirms the filename
+5. **Record:** open encoder → feed frames with PTS → stop → finalize
 6. **Detach:** stop capture, finalize any recording, return to "connect a
    scope"
 
@@ -244,18 +313,20 @@ Implementation is a pure UI-side transform on the `VideoOutput` item. No
 frame data is touched.
 
 - Range 1x to 8x digital; beyond that it is only blur
-- Centred on the pinch centroid (touch) or mouse cursor (desktop wheel)
-- Pan clamped so the viewport never leaves the frame
-- **Reset-to-fit control required.** It is easy to get lost at 8x on a
-  bench, and hunting for the sample is the kind of friction that makes a
-  tool unpopular
+- Centred on the mouse cursor, or the pinch centroid on a touchscreen
+- Pan clamped so the viewport never leaves the frame. Because the window is
+  resizable, the letterboxed case — where the visible region is *larger* than
+  the frame on one axis — is reached by ordinary use and must centre rather
+  than clamp
+- **Reset-to-fit control required.** It is easy to get lost at 8x, and
+  hunting for the sample is the kind of friction that makes a tool unpopular
 - Bilinear filtering by default
 
 ## 10. Failure handling
 
 Every error message must state what happened, whether data was saved, and
-the one action to take. Generic failures are what generate support calls
-from the field, where nobody can read a log.
+the one action to take. Generic failures are what generate support calls from
+the field, where nobody can read a log.
 
 ### 10.1 Detach mid-recording
 
@@ -271,11 +342,10 @@ Naming the saved file is required, not decorative. "Device disconnected"
 alone leaves the technician assuming the take was lost.
 
 **Accepted exposure:** this covers cable snags and scope failures, because
-the app survives. It does *not* cover app crash or battery death, which
-truncate the file mid-write. The fix would be fragmented MP4 or Matroska,
-both of which survive truncation, but `QMediaRecorder` does not expose muxer
-flags, so it would mean bypassing Qt's recorder on desktop as well. v1
-accepts the exposure. Revisit if dead batteries prove common in practice.
+the app survives. It does *not* cover app crash or power loss, which truncate
+the file mid-write. The fix would be fragmented MP4 or Matroska, both of
+which survive truncation, but `QMediaRecorder` does not expose muxer flags,
+so it would mean bypassing Qt's recorder entirely. v1 accepts the exposure.
 
 ### 10.2 USB bandwidth
 
@@ -285,29 +355,31 @@ ever arrive. No error, just black. This is live for the known setup, where
 the scope sits behind a 6-in-1 multiport hub alongside a card reader.
 
 **A successful `open()` is not evidence that streaming works.** Hence a
-frame-arrival watchdog: no first frame within ~3s of open -> drop to the
-next-lower format and retry -> if that also fails, report "no video
-received; try a direct port instead of the hub, or a lower resolution."
+frame-arrival watchdog: no first frame within 3 s of open → **step down the
+format preference list and retry** → when the list is exhausted, report "no
+video received; try a direct port instead of the hub", naming the formats the
+scope advertised.
+
+Complaining without retrying does not satisfy this requirement.
 
 ### 10.3 Failure table
 
 | Failure | Response |
 |---|---|
 | Detach mid-recording | Finalize file, name it in UI, return to idle |
-| Detach mid-snapshot | Discard partial write; no orphan file |
-| No frames after open | Watchdog -> downgrade format -> retry -> actionable message |
-| Stream stalls later (no frame for 5s) | One silent reopen attempt, then surface |
+| Detach mid-snapshot | Discard the armed capture; no orphan file |
+| No frames after open | Walk down the format chain; on exhaustion, report the advertised formats and suggest a direct port |
+| Stream stalls later (no frame for 5 s) | One silent reopen attempt, then surface |
 | Linux `EACCES` on `/dev/video*` | Show the literal fix: `sudo usermod -aG video $USER`, then re-login |
-| macOS camera denied | Deep-link to Privacy & Security -> Camera |
-| Android USB permission denied | Explain, offer retry; `device_filter.xml` prevents re-asking on every attach |
-| Device claimed by another app | Name the conflicting app, not "failed to open" |
-| Disk nearly full | Refuse to start recording below 500 MB free; during recording, stop and finalize at 100 MB free. Refuse snapshot below 50 MB |
+| macOS camera denied | Deep-link to Privacy & Security → Camera |
+| Windows camera denied | Deep-link to `ms-settings:privacy-webcam` |
+| Device claimed by another app | Surface the driver's reported cause; never a bare "failed to open" |
+| Disk nearly full | Refuse to start recording below 500 MB free; stop and finalize at 100 MB; refuse snapshot below 50 MB |
 | All formats fail | Report what the scope *advertised*, for diagnosability |
-| Android backgrounded | Stop and finalize, notify. No foreground service in v1 |
 
 ### 10.4 Accepted limitation
 
-Filenames use device local time, and offline tablets drift. A wrong clock
+Filenames use device local time, and offline machines drift. A wrong clock
 means wrong evidence timestamps. Known; not solved in v1.
 
 ## 11. Testing
@@ -316,16 +388,10 @@ TDD applies. `view` and `storage` are pure logic and are written test-first.
 
 | Layer | Coverage |
 |---|---|
-| Unit | Zoom clamping, pan bounds, reset-to-fit, filename generation, free-space math, format-preference ordering — pure functions, no hardware |
-| Component | `FakeCaptureSource` drives the real pipeline: snapshot a known pattern and assert pixels; record 5s and assert the MP4 is valid and ~5s long |
-| Failure injection | `FakeCaptureSource` can detach mid-recording, stall, or emit zero frames — every row of 10.3 gets an automated test **with no scope attached** |
-| Manual | Real scope on all four platforms, via a direct port *and* through the hub |
-
-`FakeCaptureSource` implements `ICaptureSource` and emits a synthetic moving
-test pattern. Because it sits at the same seam as the real backends, the
-entire app — UI, zoom, snapshot, recording — runs and is testable on CI with
-no microscope attached. Without this seam, testing means hand-verification
-with hardware on four machines, which in practice means not testing.
+| Unit | Zoom clamping, letterboxed pan centring, reset-to-fit, filename collisions, free-space thresholds, format-preference ordering — pure functions, no hardware |
+| Component | `FakeCaptureSource` drives the real pipeline: snapshot a known pattern and assert pixels; record and assert the MP4 is valid and the right duration |
+| Failure injection | `FakeCaptureSource` can detach mid-recording, stall, emit zero frames, or exhaust the format chain — every row of §10.3 gets an automated test **with no scope attached** |
+| Manual | Real scope on all three platforms, via a direct port *and* through the hub |
 
 Detach-mid-recording is simultaneously the most important behaviour in the
 app and the most tedious to verify by hand. Behind a fake source it is a CI
@@ -336,35 +402,59 @@ bandwidth negotiation without real USB.
 
 ## 12. Packaging
 
-All four artifacts install without admin:
+All three artifacts install without admin:
 
 | Platform | Artifact | Notes |
 |---|---|---|
 | Windows | Portable folder / ZIP via `windeployqt` | Unzip and run. Optional per-user installer to `%LOCALAPPDATA%` |
-| macOS | `.app` via `macdeployqt`, drag to `~/Applications` | **Requires Developer ID signing + notarization (~$99/yr)** or Gatekeeper blocks it outright |
-| Linux | AppImage | `chmod +x` and run |
-| Android | APK via `androiddeployqt` | Sideload or MDM push |
+| macOS | `.app` via `macdeployqt`, drag to `~/Applications` | **Requires Developer ID signing + notarization** or Gatekeeper blocks it outright. Also requires `NSCameraUsageDescription`, without which macOS kills the process on first camera access |
+| Linux | AppImage via `linuxdeploy` | `chmod +x` and run |
 
 **Code signing is the real gate, not privilege.** Unsigned Windows binaries
-trigger SmartScreen until reputation accrues; unsigned macOS apps are
-blocked entirely. Budget for certificates.
-
-**Confirm before Android rollout:** MDM policy may forbid installation from
-outside the Play Store. This is an organisational dependency, not a
-technical one.
+trigger SmartScreen until reputation accrues; unsigned macOS apps are blocked
+entirely. Budget for certificates, and start the Apple Developer account
+early — it is the top item in §6 for a reason.
 
 ## 13. Output files
 
 - Snapshots: JPEG, full sensor resolution
 - Video: H.264 in MP4, no audio track
-- Destination: a plain user-visible folder, timestamped filenames
+- Destination: a plain user-visible folder, timestamped filenames, with a
+  numeric suffix on same-second collisions so a double-tap cannot overwrite
 - No database, no index, no metadata sidecar
 
 ## 14. Open questions
 
-1. **Audio on recordings.** Assumed absent. If technicians want spoken
-   notes, this changes the recording pipeline on both platforms.
+1. **Audio on recordings.** Assumed absent. If technicians want spoken notes,
+   this changes the recording pipeline.
 2. **High-zoom filtering.** Bilinear by default. Nearest-neighbour shows
    actual sensor pixels and is arguably more honest for evidence work.
-3. **Crash/power-loss resilience for video.** See 10.1.
-4. **Commercial Qt licence.** Only if this becomes a sold product. See 5.
+3. **Crash/power-loss resilience for video.** See §10.1.
+
+Resolved since revision 1: the commercial Qt licence question. With no
+Android target there is no static linking, so LGPL is satisfied by shared
+libraries on all three platforms.
+
+## 15. Implementation
+
+Plan: `docs/superpowers/plans/2026-09-30-microscope-desktop-app.md`
+— 15 tasks, TDD throughout.
+
+## 16. Revision history
+
+**Revision 1 (2026-09-30).** Targets were Windows, macOS, Linux, and
+**Android**; iOS was excluded for lack of external-USB-camera support.
+Android required `libuvc`/`libusb` frame acquisition behind a JNI bridge plus
+a `MediaCodec` encoder, estimated at ~60% of effort and nearly all technical
+risk, and the plan opened with a mandatory 3-day de-risking spike. The
+`ICaptureSource` seam was justified as a platform abstraction, and C++17 and
+QML were both *forced* by Android.
+
+**Revision 2 (2026-09-30).** Android dropped by decision. The spike, the
+Android backend, the second encoder, and the phase-2 plan were all removed.
+C++ and QML became preferences with stated reasons rather than constraints
+(§5.1, §5.2); the framework choice was re-examined against a web stack now
+that the four-platform argument no longer applies (§5.3); `ICaptureSource`
+was re-justified on testability alone (§7.3); and the project's risk profile
+shifted from one schedule-invalidating unknown to three manageable
+operational items (§6).

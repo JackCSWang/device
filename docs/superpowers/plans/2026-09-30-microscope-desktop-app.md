@@ -1,8 +1,8 @@
-# Microscope Capture App — Phase 1 (Core + Desktop) Implementation Plan
+# Microscope Capture App — Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** A working microscope capture app on Windows, macOS, and Linux — live view, digital zoom/pan, full-resolution JPEG snapshots, H.264/MP4 recording — plus the `ICaptureSource` seam and fake source that Phase 2 (Android) plugs into.
+**Goal:** A microscope capture app on Windows, macOS, and Linux — live view, digital zoom/pan, full-resolution JPEG snapshots, H.264/MP4 recording. These three platforms are the whole product; there is no mobile phase.
 
 **Architecture:** All frame consumers sit behind one interface, `ICaptureSource`, which emits `QVideoFrame` plus a capture timestamp. `QtCaptureSource` implements it with `QCamera`; `FakeCaptureSource` implements it with a synthetic pattern and failure injection, so the whole app is testable on CI with no hardware. `CaptureController` fans frames out to a display sink and, when armed, to `SnapshotWriter` and `IRecorder`. Zoom lives entirely in `ViewTransform` and never touches frame data.
 
@@ -14,7 +14,7 @@
 
 Every task's requirements implicitly include this section.
 
-- **Qt 6.8 LTS minimum.** The spec says "Qt 6". 6.8 is pinned because `QVideoFrameInput` (6.8+) is what lets a recorder accept pushed frames; without it, recording cannot be tested against `FakeCaptureSource` and desktop/Android recorders cannot share one interface. **This is a derived constraint, not one the spec states — see "Deviations" below.**
+- **Qt 6.8 LTS minimum.** The spec says "Qt 6". 6.8 is pinned because `QVideoFrameInput` (6.8+) is what lets a recorder accept pushed frames, which is the only way recording can be tested against `FakeCaptureSource` rather than by hand with a scope on three machines. **This is a derived constraint, not one the spec states — see "Deviations" below.**
 - **C++17.** Spec §5.
 - **No elevated privileges, ever.** No kernel driver, no system service, no elevated helper. Spec §4.1.
 - **No network calls.** Any feature requiring one is out of scope. Spec §4.2.
@@ -30,88 +30,24 @@ Every task's requirements implicitly include this section.
 
 Five input classes the spec implies but never names, ordered by how likely they are to bite a technician in the field. Each has a test pinned to the task owning the code.
 
-1. **Viewport aspect ratio differs from frame aspect ratio.** Spec §9 says "pan clamped so the viewport never leaves the frame", but a 16:9 frame in a square tablet viewport is letterboxed — along the letterboxed axis the visible region is *larger* than the frame, so clamping must centre rather than clamp. Naive clamping lets the user pan into black void. → Task 3.
-2. **Two snapshots within the same second.** Spec §13 says timestamped filenames. A technician tapping the shutter twice generates the same name and the second silently overwrites the first — evidence lost with no error. → Task 5.
-3. **A YUY2 frame reaching the snapshot writer.** Spec §8.5's own preference list includes YUY2, but a writer that assumes packed RGB produces garbage JPEGs. Colour conversion must be explicit. → Task 8.
-4. **Start and immediately stop a recording.** A double-tap produces a zero-frame MP4. It must be either a valid file or no file — never a 0-byte `.mp4` that looks like a recording and won't open. → Task 9.
-5. **Snapshot while recording.** Spec covers each alone, never both. Both must succeed and neither may drop frames from the other. → Task 10.
+1. **Viewport aspect ratio differs from frame aspect ratio.** Spec §9 says "pan clamped so the viewport never leaves the frame", but a 16:9 frame in a window the user has dragged to any other shape is letterboxed — along the letterboxed axis the visible region is *larger* than the frame, so clamping must centre rather than clamp. Naive clamping lets the user pan into black void, and on desktop the window is resizable, so this is reached by ordinary use rather than an edge case. → Task 2.
+2. **Two snapshots within the same second.** Spec §13 says timestamped filenames. A technician tapping the shutter twice generates the same name and the second silently overwrites the first — evidence lost with no error. → Task 4.
+3. **A YUY2 frame reaching the snapshot writer.** Spec §8.5's own preference list includes YUY2, but a writer that assumes packed RGB produces garbage JPEGs. Colour conversion must be explicit. → Task 7.
+4. **Start and immediately stop a recording.** A double-tap produces a zero-frame MP4. It must be either a valid file or no file — never a 0-byte `.mp4` that looks like a recording and won't open. → Task 8.
+5. **Snapshot while recording.** Spec covers each alone, never both. Both must succeed and neither may drop frames from the other. → Task 9.
 
 ## Deviations from the spec
 
 Flag these to the human partner before implementation:
 
 1. **Qt floor raised to 6.8 LTS** (spec says "Qt 6") — see Global Constraints.
-2. **Desktop recording routes frames through us**, camera → sink → `CaptureController` → `QVideoFrameInput` → `QMediaRecorder`, rather than letting `QMediaRecorder` pull from the camera directly. Costs one hop; buys a recorder that is testable against the fake source and an `IRecorder` interface Android can implement identically.
-3. **The deep-copy rule is enforced by test, not by type.** Spec §8.3 states the rule. Making `ICaptureSource` emit an owned `Frame` would enforce it structurally but forces a ~6 MB copy per frame at 1080p30 (~180 MB/s) on the display path, which a field tablet cannot spare. Instead the seam emits `QVideoFrame`, `Frame::deepCopy` is the single chokepoint, and Task 7 has `FakeCaptureSource` deliberately scribble over its buffer immediately after emitting — so any consumer that forgot to copy fails loudly in CI. Spec §7.2's structural-enforcement claim concerns zoom, which is unaffected.
+2. **Recording routes frames through us**, camera → sink → `CaptureController` → `QVideoFrameInput` → `QMediaRecorder`, rather than letting `QMediaRecorder` pull from the camera directly. Costs one hop; buys a recorder that can be driven by `FakeCaptureSource`, so the detach-mid-recording behaviour is a CI test instead of someone yanking a cable on three machines.
+3. **The deep-copy rule is enforced by test, not by type.** Spec §8.3 states the rule. Making `ICaptureSource` emit an owned `Frame` would enforce it structurally but forces a ~6 MB copy per frame at 1080p30 (~180 MB/s) on the display path, which is waste on any machine and a real cost on a low-power field laptop. Instead the seam emits `QVideoFrame`, `Frame::deepCopy` is the single chokepoint, and Task 6 has `FakeCaptureSource` deliberately scribble over its buffer immediately after emitting — so any consumer that forgot to copy fails loudly in CI. Spec §7.2's structural-enforcement claim concerns zoom, which is unaffected.
+4. **`ICaptureSource` is retained despite having only one real implementation.** With Android gone it is no longer a platform-abstraction boundary. It stays because `FakeCaptureSource` is what makes the failure table testable at all — the seam earns its keep on testability alone, and removing it would mean verifying every row of spec §10.3 by hand.
 
 ---
 
-### Task 1: Android UVC spike (throwaway)
-
-Spec §6 names this the one assumption that can invalidate the schedule. It runs first, before any production code. **Everything built here is throwaway** and lives in `spike/` — it is never promoted into `src/`.
-
-**Files:**
-- Create: `spike/android-uvc/README.md`
-- Create: `spike/android-uvc/` (throwaway Android project)
-- Create: `docs/superpowers/spikes/2026-09-30-android-uvc-findings.md`
-
-**Interfaces:**
-- Consumes: nothing.
-- Produces: a written answer, not code. Task 2 onward do not depend on it. **Phase 2 does.**
-
-**Question:** Can we acquire frames from the actual scope on an actual target Android tablet via USB Host + libuvc, at what resolution and frame rate, and does `device_filter.xml` suppress the per-attach permission dialog?
-
-**Time-box: 3 days.** If it is not answered by then, stop and report — that result is itself the finding.
-
-- [ ] **Step 1: Record the starting hypothesis**
-
-Create `docs/superpowers/spikes/2026-09-30-android-uvc-findings.md` with the question above and the fields to fill: tablet model, Android version, scope VID:PID, formats enumerated, resolution and fps achieved, whether `camera2` saw the device at all, whether the permission dialog was suppressed, blockers.
-
-- [ ] **Step 2: Confirm the tablet is a USB host and enumerates the scope**
-
-Before writing any code, with the scope plugged into the tablet:
-
-```bash
-adb shell dumpsys usb | sed -n '1,80p'
-adb shell ls -l /dev/bus/usb/*/
-```
-
-Expected: the scope's VID:PID appears. If the tablet is not OTG-capable, **stop — the hardware choice is wrong and that is the finding.**
-
-- [ ] **Step 3: Check whether camera2 sees it (cheap, might save the whole spike)**
-
-Install any camera2-enumerating app, or:
-
-```bash
-adb shell dumpsys media.camera | grep -i -E "external|number of camera"
-```
-
-Expected: probably no external camera. If it *does* appear as `EXTERNAL`, note the exact tablet model — Phase 2 gets much cheaper on that hardware, though per spec §6 it cannot be relied on across OEMs.
-
-- [ ] **Step 4: Build a minimal libuvc frame grabber**
-
-Throwaway Android app: `UsbManager.requestPermission`, pass the fd to `libusb_wrap_sys_device`, `uvc_open`, `uvc_get_stream_ctrl_format_size`, `uvc_start_streaming`, and in the callback log `frame->width`, `frame->height`, `frame->frame_format`, and a rolling fps. Display nothing — a log line is the deliverable.
-
-- [ ] **Step 5: Measure**
-
-Run 60 seconds at each format the scope advertises. Record achieved fps and any dropped-frame or bandwidth errors. Test both a direct port and through a hub (spec §10.2).
-
-- [ ] **Step 6: Test the permission dialog**
-
-Add an `intent-filter` for `USB_DEVICE_ATTACHED` with `device_filter.xml` matching the scope's VID:PID. Detach and reattach five times. Record whether the dialog reappears after ticking "use by default".
-
-- [ ] **Step 7: Write the findings and commit**
-
-Fill in every field. State a clear recommendation: proceed with Phase 2 as specced, proceed with changes, or the hardware/platform needs reconsidering.
-
-```bash
-git add spike/android-uvc docs/superpowers/spikes/2026-09-30-android-uvc-findings.md
-git commit -m "spike: android UVC frame acquisition findings (throwaway)"
-```
-
----
-
-### Task 2: Project skeleton and test harness
+### Task 1: Project skeleton and test harness
 
 Deliverable: `ctest` runs green on all three desktop platforms. Nothing else in this plan can be verified until this exists.
 
@@ -227,7 +163,7 @@ git commit -m "build: CMake skeleton with Qt Test harness"
 
 ---
 
-### Task 3: ViewTransform — zoom and pan math
+### Task 2: ViewTransform — zoom and pan math
 
 Pure logic, no Qt Multimedia, no hardware. Owns Review Focus item 1.
 
@@ -512,7 +448,7 @@ git commit -m "feat(view): zoom/pan transform with letterbox-aware pan clamping"
 
 ---
 
-### Task 4: DiskPolicy — the three thresholds
+### Task 3: DiskPolicy — the three thresholds
 
 **Files:**
 - Create: `src/storage/DiskPolicy.h`
@@ -652,7 +588,7 @@ git commit -m "feat(storage): free-space thresholds for recording and snapshots"
 
 ---
 
-### Task 5: CaptureNaming and OutputLocation
+### Task 4: CaptureNaming and OutputLocation
 
 Owns Review Focus item 2 — the same-second collision that silently destroys evidence.
 
@@ -856,7 +792,7 @@ git commit -m "feat(storage): collision-free timestamped capture filenames"
 
 ---
 
-### Task 6: FormatPreference — negotiation order
+### Task 5: FormatPreference — negotiation order
 
 Spec §8.5: MJPEG 1080p → YUY2 720p → first supported.
 
@@ -1035,9 +971,9 @@ git commit -m "feat(capture): format negotiation preference ordering"
 
 ---
 
-### Task 7: The seam — ICaptureSource, Frame, FakeCaptureSource
+### Task 6: The seam — ICaptureSource, Frame, FakeCaptureSource
 
-The most important task in the plan. Everything downstream is testable only because of this, and Phase 2 attaches here.
+The most important task in the plan. Everything downstream is testable only because of this.
 
 **Files:**
 - Create: `src/core/Frame.h`, `src/core/Frame.cpp`
@@ -1165,9 +1101,10 @@ enum class StopReason { Requested, Detached, Error };
 // every reason and the detach tests pass while proving nothing.
 Q_DECLARE_METATYPE(StopReason)
 
-// The one seam in the system. QtCaptureSource implements it with QCamera,
-// FakeCaptureSource with a synthetic pattern, and Phase 2's UvcCaptureSource
-// with libuvc. Nothing downstream knows which it has.
+// The one seam in the system. QtCaptureSource implements it with QCamera;
+// FakeCaptureSource implements it with a synthetic pattern and failure
+// injection. Nothing downstream knows which it has, which is what lets the
+// whole failure table be tested with no scope attached.
 //
 // frameReady delivers a borrowed QVideoFrame: the underlying buffer belongs
 // to the source and is recycled. Any consumer keeping it past the slot MUST
@@ -1409,7 +1346,7 @@ git commit -m "feat(core): ICaptureSource seam, owned Frame, fake source with fa
 
 ---
 
-### Task 8: SnapshotWriter
+### Task 7: SnapshotWriter
 
 Owns Review Focus item 3 — YUY2 frames must not become garbage JPEGs.
 
@@ -1419,7 +1356,7 @@ Owns Review Focus item 3 — YUY2 frames must not become garbage JPEGs.
 - Modify: `src/CMakeLists.txt`, `tests/CMakeLists.txt`
 
 **Interfaces:**
-- Consumes: `Frame::deepCopy` (Task 7).
+- Consumes: `Frame::deepCopy` (Task 6).
 - Produces:
   - `SnapshotWriter::write(const QVideoFrame& frame, qint64 timestampUs, const QString& path)` — deep-copies on the calling thread, encodes on `QThreadPool`
   - signals `written(QString path, QSize size)`, `failed(QString path, QString reason)`
@@ -1638,7 +1575,7 @@ git commit -m "feat(output): full-resolution JPEG snapshot writer on thread pool
 
 ---
 
-### Task 9: IRecorder and QtRecorder
+### Task 8: IRecorder and QtRecorder
 
 Owns Review Focus item 4 — a double-tap must not leave a 0-byte `.mp4`.
 
@@ -1649,12 +1586,12 @@ Owns Review Focus item 4 — a double-tap must not leave a 0-byte `.mp4`.
 - Modify: `src/CMakeLists.txt`, `tests/CMakeLists.txt`
 
 **Interfaces:**
-- Consumes: `FakeCaptureSource` (Task 7).
+- Consumes: `FakeCaptureSource` (Task 6).
 - Produces:
   - `class IRecorder : public QObject` with `bool start(const QString& path, const QSize& size, qreal frameRate)`, `void feed(const QVideoFrame&, qint64 ptsUs)`, `void finalizeAndStop()`, `bool isRecording() const`; signals `finished(QString path, qint64 durationUs)`, `failed(QString path, QString reason)`
   - `QtRecorder` implementing it via `QVideoFrameInput` → `QMediaCaptureSession` → `QMediaRecorder`
 
-**Why `QVideoFrameInput`:** it lets the recorder accept pushed frames, so recording is testable against the fake source and Phase 2's `MediaCodecRecorder` implements the same interface. Requires Qt 6.8 — see Global Constraints.
+**Why `QVideoFrameInput`:** it lets the recorder accept pushed frames, so recording — including the detach-mid-recording finalize in Task 9 — is testable against the fake source. Requires Qt 6.8; see Global Constraints.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -1957,7 +1894,7 @@ git commit -m "feat(output): IRecorder plus QVideoFrameInput-backed desktop reco
 
 ---
 
-### Task 10: CaptureController — orchestration, watchdogs, detach handling
+### Task 9: CaptureController — orchestration, watchdogs, detach handling
 
 The behavioural heart of the app. Owns Review Focus item 5 and spec §10.1's defining field failure.
 
@@ -2400,9 +2337,9 @@ git commit -m "feat(capture): controller with watchdogs and detach finalization"
 
 ---
 
-### Task 11: QtCaptureSource and DeviceRegistry — real desktop hardware
+### Task 10: QtCaptureSource and DeviceRegistry — real desktop hardware
 
-First task that touches a physical camera. Tests here are skipped when no camera is present, so CI stays green; verification is the manual matrix in Task 14.
+First task that touches a physical camera. Tests here are skipped when no camera is present, so CI stays green; verification is the manual matrix in Task 13.
 
 **Files:**
 - Create: `src/device/DeviceRegistry.h`, `src/device/DeviceRegistry.cpp`
@@ -2724,7 +2661,7 @@ git commit -m "feat(capture): desktop QCamera source and device registry"
 
 ---
 
-### Task 12: ViewTransformModel — expose zoom to QML
+### Task 11: ViewTransformModel — expose zoom to QML
 
 **Files:**
 - Create: `src/view/ViewTransformModel.h`, `src/view/ViewTransformModel.cpp`
@@ -2914,7 +2851,7 @@ git commit -m "feat(view): QML-facing transform model"
 
 ---
 
-### Task 13: QML user interface
+### Task 12: QML user interface
 
 **Files:**
 - Create: `src/ui/Main.qml`, `src/ui/VideoView.qml`, `src/ui/ControlBar.qml`, `src/ui/StatusBanner.qml`
@@ -3301,7 +3238,7 @@ qt_add_qml_module(microscope
 
 `ViewTransformModel` carries `QML_ELEMENT`, so its header and source must be
 listed in `SOURCES` here for the type to register with the `microscope` URI.
-It stays compiled into `microscope_core` as well so the unit tests in Task 12
+It stays compiled into `microscope_core` as well so the unit tests in Task 11
 can link it without the QML module.
 
 - [ ] **Step 6: Build and run with the scope attached**
@@ -3331,7 +3268,7 @@ git commit -m "feat(ui): QML shell with pinch/wheel zoom, capture controls, stat
 
 ---
 
-### Task 14: Zero-admin packaging and the manual test matrix
+### Task 13: Zero-admin packaging and the manual test matrix
 
 **Files:**
 - Create: `packaging/windows/build-portable.sh`
@@ -3511,9 +3448,9 @@ git commit -m "build: zero-admin packaging for all three desktop platforms"
 
 ---
 
-### Task 15: Format fallback chain
+### Task 14: Format fallback chain
 
-Spec §10.2 requires the watchdog to **downgrade the format and retry**, not merely complain. Task 10 wired the watchdog but never walks the chain, so this completes it.
+Spec §10.2 requires the watchdog to **downgrade the format and retry**, not merely complain. Task 9 wired the watchdog but never walks the chain, so this completes it.
 
 **Files:**
 - Modify: `src/core/ICaptureSource.h`
@@ -3523,7 +3460,7 @@ Spec §10.2 requires the watchdog to **downgrade the format and retry**, not mer
 - Modify: `tests/CMakeLists.txt`
 
 **Interfaces:**
-- Consumes: `ICaptureSource::selectNextFormat()` (Task 7), `FakeCaptureSource::setFallbackCount`/`fallbacksUsed` (Task 7).
+- Consumes: `ICaptureSource::selectNextFormat()` (Task 6), `FakeCaptureSource::setFallbackCount`/`fallbacksUsed` (Task 6).
 - Produces: `ICaptureSource::formatDescriptions() -> QStringList` (virtual, default empty); `CaptureController::formatsExhausted(QStringList advertised)` signal.
 
 - [ ] **Step 1: Write the failing test**
@@ -3688,7 +3625,7 @@ git commit -m "feat(capture): walk the format preference chain on a silent open"
 
 ---
 
-### Task 16: Remaining failure modes from spec §10.3
+### Task 15: Remaining failure modes from spec §10.3
 
 Four rows of the spec's failure table have code but no test, or a message that discards the information the user needs.
 
@@ -3700,7 +3637,7 @@ Four rows of the spec's failure table have code but no test, or a message that d
 - Modify: `tests/CMakeLists.txt`
 
 **Interfaces:**
-- Consumes: everything from Tasks 7–13.
+- Consumes: everything from Tasks 6–12.
 - Produces: `AppContext::openCameraPrivacySettings()` invokable; `AppContext::cameraAccessDenied` property.
 
 - [ ] **Step 1: Write the failing test**
@@ -3841,7 +3778,7 @@ void CaptureController::onSourceStopped(StopReason reason, const QString& detail
 
 - [ ] **Step 4: Keep the "disconnected" wording the earlier tests assert**
 
-Task 10's `detachMidRecordingFinalizesAndNamesTheFile` and this task's `detachWithNoRecordingSaysNothingWasBeingRecorded` both expect "disconnected". Use it for `Detached` and "stopped" for `Error`:
+Task 9's `detachMidRecordingFinalizesAndNamesTheFile` and this task's `detachWithNoRecordingSaysNothingWasBeingRecorded` both expect "disconnected". Use it for `Detached` and "stopped" for `Error`:
 
 ```cpp
     const QString what = (reason == StopReason::Detached)
@@ -3849,7 +3786,7 @@ Task 10's `detachMidRecordingFinalizesAndNamesTheFile` and this task's `detachWi
         : tr("The scope stopped.");
 ```
 
-Build the message from `what` plus the recording clause plus "Reconnect the scope to continue." Re-run Task 10's suite to confirm both still pass.
+Build the message from `what` plus the recording clause plus "Reconnect the scope to continue." Re-run Task 9's suite to confirm both still pass.
 
 - [ ] **Step 5: Add the macOS camera-privacy deep link**
 
@@ -3902,23 +3839,10 @@ Add `import QtQuick.Controls` if not already present, and give `label` a right a
 cmake -B build && cmake --build build && ctest --test-dir build --output-on-failure
 ```
 
-Expected: every test passes, including Task 10's.
+Expected: every test passes, including Task 9's.
 
 ```bash
 git add src tests/test_failure_modes.cpp tests/CMakeLists.txt
 git commit -m "feat: complete spec 10.3 failure coverage and preserve error detail"
 ```
 
----
-
-## Phase 2 (separate plan, gated on Task 1)
-
-Not part of this plan. Written only after the Task 1 spike reports. It adds:
-
-- `UvcCaptureSource` implementing `ICaptureSource` via libuvc + JNI
-- `MediaCodecRecorder` implementing `IRecorder` via Android MediaCodec
-- `device_filter.xml` intent filter to suppress the per-attach permission dialog
-- Android lifecycle handling: stop and finalize on background (spec §10.3)
-- APK packaging via `androiddeployqt`
-
-Everything in `microscope_core` is reused unchanged. That is the payoff of the seam.
