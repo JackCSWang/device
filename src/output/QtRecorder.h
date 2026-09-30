@@ -23,6 +23,7 @@ private:
     std::unique_ptr<QVideoFrameInput> m_input;
     QString m_path;
     bool m_recording = false;
+    bool m_errored = false;
     qint64 m_firstPtsUs = -1;
     qint64 m_lastPtsUs = -1;
     int m_framesFed = 0;
