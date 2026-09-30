@@ -65,6 +65,57 @@ private:
     FrameRelay m_relay;
 };
 
+// N3 fix's double: unlike WorkerThreadSource above, which allocates a fresh
+// QVideoFrame per offer (so there is never anything to recycle), this one
+// offers a single buffer, reused, and scribbles over it immediately after
+// offer() returns -- the same trick FakeCaptureSource::setScribbleAfterEmit
+// uses to catch a consumer that skipped the deep copy for the same-thread
+// contract test. Here it exercises the cross-thread pending slot instead.
+class ReusingWorkerThreadSource : public ICaptureSource {
+    Q_OBJECT
+public:
+    ReusingWorkerThreadSource() {
+        connect(&m_relay, &FrameRelay::frameReady, this, &ICaptureSource::frameReady);
+    }
+
+    bool start() override { return true; }
+    void stop() override { emit stopped(StopReason::Requested, QString()); }
+    QSize frameSize() const override { return {320, 240}; }
+
+    // Fills the one buffer with `offeredHue`, offers it, then immediately
+    // overwrites that SAME buffer with `scribbleHue` -- all from a worker
+    // thread, so the offer takes the relay's cross-thread path and a full
+    // event-loop turn separates it from delivery. Blocks until the worker
+    // is done.
+    void offerThenScribble(int offeredHue, int scribbleHue) {
+        QThread worker;
+        QObject context;
+        context.moveToThread(&worker);
+        QVideoFrame frame(QVideoFrameFormat({320, 240}, QVideoFrameFormat::Format_RGBX8888));
+        QObject::connect(&worker, &QThread::started, &context, [&] {
+            fill(frame, offeredHue);
+            m_relay.offer(frame, 0);
+            fill(frame, scribbleHue);   // the backend "recycles" the buffer
+            worker.quit();
+        });
+        worker.start();
+        QVERIFY(worker.wait(10000));
+    }
+
+    FrameRelay& relay() { return m_relay; }
+
+private:
+    static void fill(QVideoFrame& frame, int hue) {
+        if (!frame.map(QVideoFrame::WriteOnly)) return;
+        QImage view(frame.bits(0), frame.width(), frame.height(), frame.bytesPerLine(0),
+                    QImage::Format_RGBX8888);
+        view.fill(QColor::fromHsv(hue % 360, 255, 255));
+        frame.unmap();
+    }
+
+    FrameRelay m_relay;
+};
+
 class TestFrameRelay : public QObject {
     Q_OBJECT
     QTemporaryDir m_dir;
@@ -121,6 +172,34 @@ private slots:
         QCOMPARE(delivered.size(), QSize(320, 240));
         // Latest wins, so the survivor carries the last timestamp offered.
         QCOMPARE(frames.at(0).at(1).toLongLong(), 199 * 33333LL);
+    }
+
+    // N3 fix: the cross-thread pending slot must own its pixels, not just
+    // bound the queue to one slot. aWorkerThreadFloodIsCoalescedToOneFrame
+    // above cannot see this -- its double allocates a fresh QVideoFrame per
+    // offer, so nothing is ever recycled. This double offers ONE buffer and
+    // scribbles over it immediately after offer() returns, simulating a
+    // backend that recycles its buffer before the relay's queued drain()
+    // -- a full event-loop turn later -- has a chance to run.
+    //
+    // Sensitivity: store the raw offered frame in the pending slot instead
+    // of a deep copy (revert the cross-thread half of FrameRelay::offer())
+    // and this fails -- the delivered pixel is the scribble colour, not the
+    // one that was offered.
+    void aReusedBufferScribbledAfterOfferIsNotDeliveredStale() {
+        ReusingWorkerThreadSource src;
+        QSignalSpy frames(&src.relay(), &FrameRelay::frameReady);
+
+        const int offeredHue = 40;
+        const int scribbleHue = 220;
+        src.offerThenScribble(offeredHue, scribbleHue);
+
+        QTRY_COMPARE_WITH_TIMEOUT(frames.count(), 1, 3000);
+        const QVideoFrame delivered = frames.at(0).at(0).value<QVideoFrame>();
+        const QImage image = delivered.toImage();
+        QVERIFY(!image.isNull());
+        const QColor pixel = image.pixelColor(image.width() / 2, image.height() / 2);
+        QCOMPARE(pixel.hue(), offeredHue);
     }
 
     // Delivery must land on the relay's own thread, not the worker's --

@@ -1,4 +1,5 @@
 #include "capture/FrameRelay.h"
+#include "core/Frame.h"
 #include <QThread>
 
 void FrameRelay::offer(const QVideoFrame& frame, qint64 timestampUs) {
@@ -6,7 +7,9 @@ void FrameRelay::offer(const QVideoFrame& frame, qint64 timestampUs) {
         // No queue can form on the delivery thread itself, so hand the
         // frame straight on -- still borrowed, exactly as
         // ICaptureSource::frameReady documents. Deferring here would add a
-        // full event-loop turn of latency to the live view for nothing.
+        // full event-loop turn of latency to the live view for nothing, and
+        // -- deliberately -- no allocation: this is the path Windows
+        // actually takes, so it must stay a direct emit.
         {
             QMutexLocker locker(&m_mutex);
             ++m_delivered;
@@ -14,6 +17,21 @@ void FrameRelay::offer(const QVideoFrame& frame, qint64 timestampUs) {
         emit frameReady(frame, timestampUs);
         return;
     }
+
+    // Cross-thread path (spec 8.4's stale-pixel half, N3 fix): the frame is
+    // about to be parked in the pending slot and delivered a full
+    // event-loop turn later, on this relay's own thread. The backend is
+    // free to recycle the buffer it handed us the moment this call
+    // returns -- that is exactly the borrowed-buffer rule ICaptureSource.h
+    // documents, and FakeCaptureSource::setScribbleAfterEmit exists to
+    // prove a consumer that skips the copy sees the corruption. So the
+    // frame is deep-copied here, before it is parked, using the same
+    // map + toImage().copy() Frame::deepCopy already relies on for camera
+    // frames (MJPEG, YUYV, NV12, ...); wrapping the resulting QImage back
+    // into a QVideoFrame is what lets it still travel through frameReady's
+    // existing QVideoFrame signature.
+    const Frame snapshot = Frame::deepCopy(frame, timestampUs);
+    const QVideoFrame owned = snapshot.isValid() ? QVideoFrame(snapshot.image()) : frame;
 
     bool postDrain = false;
     {
@@ -23,7 +41,7 @@ void FrameRelay::offer(const QVideoFrame& frame, qint64 timestampUs) {
         // (spec 8.4), and a recording is timestamp-driven, so a dropped
         // frame costs frame rate and never playback speed.
         if (m_hasPending) ++m_coalesced;
-        m_pending = frame;
+        m_pending = owned;
         m_pendingTimestampUs = timestampUs;
         m_hasPending = true;
         if (!m_drainQueued) {
