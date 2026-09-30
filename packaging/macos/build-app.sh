@@ -9,7 +9,11 @@ BUILD=${1:-build}
 cmake -B "$BUILD" -DCMAKE_BUILD_TYPE=Release
 cmake --build "$BUILD"
 
-APP="$BUILD/src/microscope.app"
+# qt_standard_project_setup() (root CMakeLists.txt) points runtime target
+# outputs -- including a MACOSX_BUNDLE target's .app -- at the top of the
+# build tree, not at $BUILD/src/ (same root cause as the Windows script's
+# equivalent fix; see packaging/windows/build-portable.sh).
+APP="$BUILD/microscope.app"
 macdeployqt "$APP" -qmldir=src/ui
 
 if [[ -n "${CODESIGN_IDENTITY:-}" ]]; then

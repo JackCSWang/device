@@ -38,3 +38,24 @@ if(APPLE)
         MACOSX_BUNDLE TRUE
         MACOSX_BUNDLE_INFO_PLIST ${CMAKE_SOURCE_DIR}/packaging/macos/Info.plist.in)
 endif()
+
+# packaging/linux/build-appimage.sh stages an AppDir via
+# `DESTDIR=AppDir cmake --install`. Without an install() rule that command
+# exits 0 and installs nothing, so linuxdeploy would have no executable to
+# package. This rule is what makes that possible; it is inert on Windows,
+# where packaging/windows/build-portable.sh never calls `cmake --install`
+# and instead copies the build tree's own microscope.exe directly.
+install(TARGETS microscope RUNTIME DESTINATION bin)
+
+if(UNIX AND NOT APPLE)
+    # Installed into the AppDir so linuxdeploy's --plugin qt can find them
+    # without needing --desktop-file/--icon-file to reach outside AppDir.
+    # The .desktop file ships in the repo; the icon does not yet (see
+    # packaging/linux/build-appimage.sh) -- install it too, once it exists.
+    install(FILES ${CMAKE_SOURCE_DIR}/packaging/linux/microscope.desktop
+            DESTINATION share/applications)
+    if(EXISTS ${CMAKE_SOURCE_DIR}/packaging/linux/microscope.png)
+        install(FILES ${CMAKE_SOURCE_DIR}/packaging/linux/microscope.png
+                DESTINATION share/icons/hicolor/256x256/apps)
+    endif()
+endif()

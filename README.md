@@ -23,9 +23,9 @@ for the full design).
 
 | Platform | Status |
 |---|---|
-| Windows | Supported |
-| macOS | Supported |
-| Linux | Supported |
+| Windows | Supported — built and tested |
+| macOS | Supported — **unverified**: never built or tested, see Packaging below |
+| Linux | Supported — **unverified**: never built or tested, see Packaging below |
 | Android | **Excluded** |
 | iOS | **Excluded** |
 
@@ -60,7 +60,7 @@ require elevation to produce or to run the result (spec §12):
 
 ```bash
 packaging/windows/build-portable.sh   # -> dist/microscope-windows.zip
-packaging/macos/build-app.sh          # -> <build>/src/microscope.app (sign + notarize before distributing)
+packaging/macos/build-app.sh          # -> <build>/microscope.app (sign + notarize before distributing)
 packaging/linux/build-appimage.sh     # -> Microscope-x86_64.AppImage
 ```
 

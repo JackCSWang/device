@@ -134,6 +134,15 @@ live test exercises the busy/error path — `FakeCaptureSource` can simulate
 a detach but not a real driver-level "device busy" error. This scenario is
 the only way that logic gets exercised against reality before release.
 
+**Explicit fail condition — total silence:** as of this writing,
+`onSourceStopped` has no branch at all for `StopReason::Error` while
+nothing is recording, so the true current behaviour is not a wrong message
+but **no banner appearing whatsoever**. If that is what you observe, mark
+this **Fail** — do not treat silence as an ambiguous or passing result just
+because nothing claimed the scope was disconnected. (A fix that gives this
+path a real "stopped" message is tracked separately; this note exists so a
+regression back to silence is caught here rather than waved through.)
+
 ### 6. Resize the window while panned at high zoom
 
 **Setup:** zoom in (well above 1x, ideally near 8x) and pan away from
@@ -248,3 +257,14 @@ looks like on the hardware actually available:
   Every row in this document, Part A and Part B alike, must be run fresh
   the first time either platform is built, with no assumption carried over
   from the Windows results.
+- **The Linux permission check only ever looks at `/dev/video0`.**
+  `CaptureController::begin()`'s `Q_OS_LINUX` branch hardcodes that one
+  device node (per the Task 13 brief). If the scope enumerates at
+  `/dev/video1` or higher — plausible on a machine with a built-in webcam
+  or a second capture device present — an actual permission problem on the
+  real device node will **not** be detected, and the technician gets the
+  generic "could not open the scope" message instead of the actionable
+  `usermod -aG video` hint. Note which device node the scope actually
+  enumerated as (`v4l2-ctl --list-devices` or equivalent) on every Linux
+  matrix run, and treat a missed permission hint on a non-`/dev/video0`
+  device as an expected gap, not a surprise failure.
