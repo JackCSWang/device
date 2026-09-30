@@ -18,6 +18,13 @@ public:
     void stop() override;
     QSize frameSize() const override { return m_size; }
     bool selectNextFormat() override;
+    // Known, recognisable strings so a test can assert the exhaustion path
+    // actually threads this list through to CaptureController::
+    // formatsExhausted and the final status message (spec 10.3), rather than
+    // the interface's silent default empty list.
+    QStringList formatDescriptions() const override {
+        return {QStringLiteral("1920x1080 @ 30fps"), QStringLiteral("1280x720 @ 30fps")};
+    }
 
     void setFrameSize(QSize size) { m_size = size; }
     void setPixelFormat(QVideoFrameFormat::PixelFormat f) { m_pixelFormat = f; }

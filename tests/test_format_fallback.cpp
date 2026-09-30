@@ -38,9 +38,23 @@ private slots:
         c.begin();
 
         QVERIFY(exhausted.wait(CaptureController::FirstFrameTimeoutMs + 3000));
+
+        // The signal payload must actually be what the (fake) scope
+        // advertised, not the interface's silent default empty list --
+        // that is spec 10.3's whole point: a technician in the field who
+        // cannot read a log needs this list, not just a generic complaint.
+        const QStringList expected = src.formatDescriptions();
+        QCOMPARE(expected, (QStringList{QStringLiteral("1920x1080 @ 30fps"),
+                                         QStringLiteral("1280x720 @ 30fps")}));
+        QCOMPARE(exhausted.count(), 1);
+        QCOMPARE(exhausted.at(0).at(0).value<QStringList>(), expected);
+
         QVERIFY(msgs.count() > 0);
-        // Must name an action, per spec 10.
-        QVERIFY(msgs.last().at(0).toString().contains(QStringLiteral("port")));
+        const QString last = msgs.last().at(0).toString();
+        for (const QString& format : expected)
+            QVERIFY(last.contains(format));
+        // Must also name an action, per spec 10.
+        QVERIFY(last.contains(QStringLiteral("port")));
     }
 
     void aFrameArrivingStopsTheFallbackWalk() {
