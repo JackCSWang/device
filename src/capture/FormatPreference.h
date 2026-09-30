@@ -7,6 +7,14 @@ struct CaptureFormat {
     QVideoFrameFormat::PixelFormat pixelFormat = QVideoFrameFormat::Format_Invalid;
     QSize resolution;
     qreal maxFrameRate = 0.0;
+
+    // Required so QCOMPARE can diff QList<CaptureFormat> directly (used by
+    // Task 10's advertisedFormatsAreOrderedBestFirst); without it the
+    // QList<T> QCOMPARE overload fails to compile for lack of operator==.
+    bool operator==(const CaptureFormat& other) const {
+        return pixelFormat == other.pixelFormat && resolution == other.resolution
+            && maxFrameRate == other.maxFrameRate;
+    }
 };
 
 // Orders advertised formats best-first. The full list is always returned,
