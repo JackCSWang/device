@@ -43,13 +43,26 @@ private slots:
         src.stop();
     }
 
-    // Important 7. frameReady's documented threading contract is "always
-    // emitted on the thread the source lives on", and QtCaptureSource
-    // enforces it through FrameRelay. This records what the backend
-    // actually does on this machine, which is the measurement the contract
-    // was written from: on Windows 10 / Qt 6.8.3, both the `windows` (Media
-    // Foundation) and `ffmpeg` backends deliver on the sink's own thread,
-    // so the relay's coalescing never engages here. macOS and Linux have
+    // Important 7 / N2 fix. frameReady's documented threading contract is
+    // "always emitted on the thread the source lives on" -- but that much is
+    // *guaranteed* by FrameRelay regardless of what the backend does: a
+    // cross-thread offer is queued onto the relay's own thread before
+    // frameReady is ever emitted (see FrameRelay::offer()). So
+    // `QCOMPARE(seen, src.thread())` alone is tautological: it restates the
+    // relay's contract, not an observation of the backend, and cannot fail
+    // no matter which thread Media Foundation/AVFoundation/V4L2 actually
+    // delivers on.
+    //
+    // What actually distinguishes "the backend delivers same-thread" from
+    // "the backend delivers cross-thread and the relay silently reroutes
+    // it" is coalescedCount(): zero means every offer took the direct,
+    // same-thread fast path in FrameRelay::offer() (the `if
+    // (QThread::currentThread() == thread())` branch); any cross-thread
+    // offer that queued instead would show up there once a second frame
+    // arrives while the first is still pending. This records what the
+    // backend actually does on this machine: on Windows 10 / Qt 6.8.3, both
+    // the `windows` (Media Foundation) and `ffmpeg` backends deliver on the
+    // sink's own thread, so coalescedCount() stays 0. macOS and Linux have
     // never been run.
     void framesArriveOnTheSourcesOwnThread() {
         if (!haveCamera()) QSKIP("no camera attached");
@@ -64,11 +77,17 @@ private slots:
         QVERIFY(src.start());
         QTRY_VERIFY_WITH_TIMEOUT(count > 0, 5000);
         qInfo().noquote() << QStringLiteral(
-            "frameReady delivered on %1 (source thread %2); frames=%3")
+            "frameReady delivered on %1 (source thread %2); frames=%3; coalesced=%4")
             .arg(reinterpret_cast<quintptr>(seen))
             .arg(reinterpret_cast<quintptr>(src.thread()))
-            .arg(count);
+            .arg(count)
+            .arg(src.relay().coalescedCount());
         QCOMPARE(seen, src.thread());
+        // The actual observable: zero coalesced frames means the relay's
+        // same-thread fast path was taken every time, i.e. the backend
+        // really did deliver on this thread rather than the relay having
+        // silently rerouted a cross-thread delivery onto it.
+        QCOMPARE(src.relay().coalescedCount(), 0);
         src.stop();
     }
 
