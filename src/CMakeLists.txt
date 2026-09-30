@@ -11,5 +11,21 @@ target_sources(microscope_core PRIVATE view/ViewTransform.cpp storage/DiskPolicy
     device/DeviceRegistry.cpp
     capture/QtCaptureSource.cpp)
 
-qt_add_executable(microscope main.cpp)
+qt_add_executable(microscope main.cpp AppContext.cpp)
 target_link_libraries(microscope PRIVATE microscope_core Qt6::Quick)
+
+qt_add_qml_module(microscope
+    URI microscope
+    VERSION 1.0
+    QML_FILES ui/Main.qml ui/VideoView.qml ui/ControlBar.qml ui/StatusBanner.qml
+    SOURCES
+        AppContext.h AppContext.cpp
+        view/ViewTransformModel.h view/ViewTransformModel.cpp
+)
+
+# The generated microscope_qmltyperegistrations.cpp guards each QML_ELEMENT
+# header with `#if __has_include(<HeaderName.h>)` using the bare filename, so
+# ViewTransformModel.h -- nested under view/, unlike AppContext.h -- needs its
+# directory on this target's include path or that guard silently fails and
+# the type is registered against an incomplete forward declaration.
+target_include_directories(microscope PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/view)
