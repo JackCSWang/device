@@ -17,9 +17,17 @@ target_sources(microscope_core PRIVATE view/ViewTransform.cpp storage/DiskPolicy
 qt_add_executable(microscope main.cpp AppContext.cpp)
 target_link_libraries(microscope PRIVATE microscope_core Qt6::Quick)
 
+# The module URI matches the executable's target name, so the module's
+# default output directory (${CMAKE_CURRENT_BINARY_DIR}/microscope, holding
+# qmldir and microscope.qmltypes) is the exact path ld must write the
+# executable to on any platform where the binary has no suffix -- the link
+# fails with "cannot open output file src/microscope: Is a directory".
+# Invisible on Windows, where the binary is microscope.exe; fatal on Linux
+# and macOS. Giving the module its own directory separates the two.
 qt_add_qml_module(microscope
     URI microscope
     VERSION 1.0
+    OUTPUT_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/qml/microscope
     QML_FILES ui/Main.qml ui/VideoView.qml ui/ControlBar.qml ui/StatusBanner.qml
     SOURCES
         AppContext.h AppContext.cpp
