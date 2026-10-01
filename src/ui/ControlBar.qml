@@ -12,6 +12,10 @@ Pane {
             text: qsTr("Snapshot")
             enabled: AppContext.hasDevice
             Layout.preferredHeight: 56       // large enough for gloved hands
+            focusPolicy: Qt.NoFocus   // Space belongs to the snapshot shortcut
+            // The shortcut is useless if nobody knows it is there.
+            ToolTip.visible: hovered
+            ToolTip.text: qsTr("Snapshot (Space)")
             onClicked: AppContext.snapshot()
         }
 
@@ -25,6 +29,7 @@ Pane {
             // its own "no video yet" message is still reachable.
             enabled: AppContext.hasVideo
             Layout.preferredHeight: 56
+            focusPolicy: Qt.NoFocus   // Space belongs to the snapshot shortcut
             highlighted: AppContext.recording
             onClicked: AppContext.toggleRecording()
         }
@@ -41,6 +46,7 @@ Pane {
             text: qsTr("Change scope")
             visible: AppContext.deviceNames.length > 1
             Layout.preferredHeight: 56
+            focusPolicy: Qt.NoFocus   // Space belongs to the snapshot shortcut
             onClicked: AppContext.changeScope()
         }
 
@@ -52,12 +58,14 @@ Pane {
         Button {
             text: qsTr("Fit")
             Layout.preferredHeight: 56
+            focusPolicy: Qt.NoFocus   // Space belongs to the snapshot shortcut
             onClicked: AppContext.resetView()
         }
 
         Button {
             text: qsTr("Open folder")
             Layout.preferredHeight: 56
+            focusPolicy: Qt.NoFocus   // Space belongs to the snapshot shortcut
             onClicked: AppContext.openOutputFolder()
         }
     }
