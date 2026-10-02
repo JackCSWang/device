@@ -27,6 +27,11 @@ public:
     Q_INVOKABLE void setFrameSize(QSizeF size);
     Q_INVOKABLE void setViewportSize(QSizeF size);
     Q_INVOKABLE void zoomAt(qreal factor, qreal focusX, qreal focusY);
+    // Zoom about the middle of the viewport, for the on-screen +/- buttons.
+    // Wheel and pinch zoom about the pointer, which a button does not have.
+    // The arithmetic lives here rather than in QML so it stays testable and
+    // so the clamp at MinZoom/MaxZoom cannot be bypassed by a caller.
+    Q_INVOKABLE void zoomByCentered(qreal factor);
     Q_INVOKABLE void panBy(qreal dx, qreal dy);
     Q_INVOKABLE void resetToFit();
 

@@ -6,6 +6,7 @@
 #include "output/QtRecorder.h"
 #include "storage/OutputLocation.h"
 #include "view/ViewTransformModel.h"
+#include "view/OrientationModel.h"
 #include <QDesktopServices>
 #include <QSettings>
 #include <QUrl>
@@ -26,6 +27,7 @@ AppContext::AppContext(QObject* parent)
     : QObject(parent),
       m_registry(new DeviceRegistry(this)),
       m_transform(new ViewTransformModel(this)),
+      m_orientation(new OrientationModel(this)),
       m_outputDir(OutputLocation::defaultDirectory()) {
 
     m_session = std::make_unique<CaptureSession>(
@@ -47,7 +49,33 @@ AppContext::AppContext(QObject* parent)
     connect(m_session->status(), &StatusModel::lastOutcomeChanged,
             this, &AppContext::lastOutcomeTextChanged);
     connect(m_session.get(), &CaptureSession::frameSizeChanged, this, [this](QSize size) {
-        m_transform->setFrameSize(size);
+        m_rawFrameSize = size;
+        // The view fits the frame as the operator sees it, so a quarter turn
+        // must swap the axes here too. Without this the fit scale and the
+        // pan clamp are computed against the wrong aspect, and a rotated
+        // view either letterboxes wrongly or refuses to pan where there is
+        // still picture to reach.
+        m_transform->setFrameSize(m_orientation->transformedSize(m_rawFrameSize));
+    });
+
+    // One orientation change drives three things: the capture path (so
+    // snapshots and new recordings follow it), the view's own idea of the
+    // frame's shape, and a reset to fit. The reset is deliberate -- zoom and
+    // pan are expressed in the old axes, so keeping them across a quarter
+    // turn leaves the operator looking at a corner of the sample with no
+    // obvious way back.
+    connect(m_orientation, &OrientationModel::changed, this, [this] {
+        m_session->setOrientation(m_orientation->value());
+        m_transform->setFrameSize(m_orientation->transformedSize(m_rawFrameSize));
+        m_transform->resetToFit();
+    });
+
+    // The orientation controls go dead while a recording is in flight: the
+    // encoder's frame size is fixed for the take (CaptureController latches
+    // the orientation for exactly that reason), so offering a rotation the
+    // recording cannot follow would be a lie.
+    connect(this, &AppContext::recordingChanged, this, [this] {
+        m_orientation->setLocked(recording());
     });
     connect(m_session.get(), &CaptureSession::rememberedDeviceIdChanged,
             this, [](const QString& id) {

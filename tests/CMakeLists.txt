@@ -6,6 +6,7 @@ endfunction()
 
 microscope_test(test_harness)
 microscope_test(test_view_transform)
+microscope_test(test_orientation)
 microscope_test(test_disk_policy)
 microscope_test(test_capture_naming)
 microscope_test(test_format_preference)
@@ -66,6 +67,7 @@ qt_add_qml_module(test_qml_smoke
     SOURCES
         ${CMAKE_SOURCE_DIR}/src/AppContext.h ${CMAKE_SOURCE_DIR}/src/AppContext.cpp
         ${CMAKE_SOURCE_DIR}/src/view/ViewTransformModel.h ${CMAKE_SOURCE_DIR}/src/view/ViewTransformModel.cpp
+        ${CMAKE_SOURCE_DIR}/src/view/OrientationModel.h ${CMAKE_SOURCE_DIR}/src/view/OrientationModel.cpp
 )
 # Same fix as src/CMakeLists.txt's Defect 1: the generated type-registration
 # file's __has_include(<ViewTransformModel.h>) guard needs that header's own
@@ -73,3 +75,13 @@ qt_add_qml_module(test_qml_smoke
 target_include_directories(test_qml_smoke PRIVATE ${CMAKE_SOURCE_DIR}/src/view)
 add_test(NAME test_qml_smoke COMMAND test_qml_smoke)
 set_tests_properties(test_qml_smoke PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
+# OrientationModel is a QML_ELEMENT registered into the app's qml module, so
+# like ViewTransformModel above it is not part of microscope_core and is
+# compiled directly into its own test binary.
+qt_add_executable(test_orientation_model
+    test_orientation_model.cpp
+    ${CMAKE_SOURCE_DIR}/src/view/OrientationModel.cpp)
+target_link_libraries(test_orientation_model
+    PRIVATE microscope_core Qt6::Test Qt6::Qml)
+add_test(NAME test_orientation_model COMMAND test_orientation_model)

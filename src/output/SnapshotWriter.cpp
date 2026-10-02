@@ -20,7 +20,8 @@ SnapshotWriter::~SnapshotWriter() {
 }
 
 void SnapshotWriter::write(const QVideoFrame& frame, qint64 timestampUs,
-                           const QString& path) {
+                           const QString& path,
+                           const Orientation& orientation) {
     // Copy now, on this thread, while the buffer is still valid.
     const Frame owned = Frame::deepCopy(frame, timestampUs);
     if (!owned.isValid()) {
@@ -55,9 +56,15 @@ void SnapshotWriter::write(const QVideoFrame& frame, qint64 timestampUs,
 
     const QImage image = owned.image();
     m_pendingTasks.ref();
-    QThreadPool::globalInstance()->start([this, image, path] {
-        if (image.save(path, "JPEG", JpegQuality))
-            emit written(path, image.size());
+    QThreadPool::globalInstance()->start([this, image, path, orientation] {
+        // Identity returns `image` untouched and shares its data, so an
+        // un-rotated snapshot costs exactly what it did before orientation
+        // existed. The saved size is the TRANSFORMED size -- a quarter turn
+        // of this 640x480 sensor writes a 480x640 JPEG, and `written` must
+        // report what is actually on disk.
+        const QImage out = orientation.apply(image);
+        if (out.save(path, "JPEG", JpegQuality))
+            emit written(path, out.size());
         else
             emit failed(path, tr("Could not write to %1. Nothing was saved. "
                                  "Check the folder exists and has free space.").arg(path));

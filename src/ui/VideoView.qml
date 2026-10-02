@@ -20,14 +20,35 @@ Item {
         // QQuickAnchors re-applies setPos() on every geometry change, so on
         // a resize the anchor can silently win and drop the pan offset
         // until the next gesture. The x/y arithmetic below already centres.
-        width: root.width
-        height: root.height
+        //
+        // On a quarter turn the item's OWN width/height swap, so that after
+        // the rotation transform below it occupies the viewport the right
+        // way round. Rotating without swapping would letterbox against the
+        // wrong axis and leave the fit scale disagreeing with
+        // ViewTransform, which AppContext feeds the oriented frame size.
+        readonly property bool quarterTurned: AppContext.orientation.degrees === 90
+                                           || AppContext.orientation.degrees === 270
+        width:  quarterTurned ? root.height : root.width
+        height: quarterTurned ? root.width  : root.height
         fillMode: VideoOutput.PreserveAspectFit
 
         // All arithmetic lives in ViewTransformModel; these are bindings only.
         scale: AppContext.transform.zoom
         x: (root.width  - width)  / 2 + AppContext.transform.contentX
         y: (root.height - height) / 2 + AppContext.transform.contentY
+
+        // Orientation is applied to the DISPLAY here and to the pixels of
+        // saved files in Orientation::apply(). The two must agree: mirror
+        // first, then rotate. Qt applies `transform` entries before the
+        // `rotation` property, so listing the mirror in `transform` and the
+        // turn in `rotation` gives exactly that order -- do not merge them
+        // into one list without re-checking which runs first.
+        rotation: AppContext.orientation.degrees
+        transform: Scale {
+            origin.x: output.width / 2
+            origin.y: output.height / 2
+            xScale: AppContext.orientation.mirrored ? -1 : 1
+        }
 
         // VideoOutput.videoSink is read-only: it is the item's own render
         // target, so frames must be pushed into it, not assigned out of

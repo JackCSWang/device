@@ -8,7 +8,30 @@
 #include <QDateTime>
 #include <QDir>
 #include <QFileInfo>
+#include "core/Frame.h"
 #include <QVideoSink>
+
+namespace {
+// Re-renders one frame with the operator's orientation baked into its
+// pixels, for the recorder. Only ever called when the orientation is not
+// identity, so the ordinary un-rotated recording path is untouched and
+// costs nothing.
+//
+// Qt 6.8 also offers QVideoFrame::setRotation()/setMirrored(), which would
+// be metadata-only and therefore free -- but whether this build's FFmpeg
+// recorder writes that through to the MP4 display matrix is unverified, and
+// metadata that gets silently dropped would produce evidence oriented
+// differently from what the operator saw. A pixel permutation is certain,
+// and at this sensor's 640x480 it is a rounding error against the H.264
+// encode already happening on every frame.
+QVideoFrame orientedFrame(const QVideoFrame& src, const Orientation& o,
+                          qint64 timestampUs) {
+    const Frame owned = Frame::deepCopy(src, timestampUs);
+    if (!owned.isValid())
+        return src;   // unreadable buffer: feed the original rather than drop it
+    return QVideoFrame(o.apply(owned.image()));
+}
+}
 
 CaptureController::CaptureController(ICaptureSource* source, IRecorder* recorder,
                                      SnapshotWriter* writer, QString outputDir,
@@ -213,7 +236,8 @@ void CaptureController::onFrame(const QVideoFrame& frame, qint64 timestampUs) {
 
     if (m_snapshotArmed) {
         m_snapshotArmed = false;
-        m_writer->write(frame, timestampUs, reserveName(QStringLiteral("jpg")));
+        m_writer->write(frame, timestampUs, reserveName(QStringLiteral("jpg")),
+                        m_orientation);
     }
 
     if (m_recorder->isRecording()) {
@@ -229,7 +253,14 @@ void CaptureController::onFrame(const QVideoFrame& frame, qint64 timestampUs) {
             m_pendingInterruption = RecordingInterruption::DiskFull;
             m_recorder->finalizeAndStop();
         } else {
-            m_recorder->feed(frame, timestampUs);
+            // m_recordingOrientation, NOT m_orientation: the encoder was
+            // opened at the latched orientation's frame size and every
+            // frame of this take must match it.
+            m_recorder->feed(m_recordingOrientation.isIdentity()
+                                 ? frame
+                                 : orientedFrame(frame, m_recordingOrientation,
+                                                 timestampUs),
+                             timestampUs);
         }
     }
 }
@@ -246,6 +277,10 @@ void CaptureController::takeSnapshot() {
         return;
     }
     m_snapshotArmed = true;   // the next frame is the one captured
+}
+
+void CaptureController::setOrientation(const Orientation& orientation) {
+    m_orientation = orientation;
 }
 
 void CaptureController::startRecording() {
@@ -269,12 +304,18 @@ void CaptureController::startRecording() {
     // source has a real size to report -- no fabricated fallback. A source
     // that still reports nothing is broken, and saying so beats recording
     // at a resolution nobody chose.
-    const QSize size = m_source->frameSize();
-    if (size.isEmpty()) {
+    const QSize rawSize = m_source->frameSize();
+    if (rawSize.isEmpty()) {
         emit status(tr("The scope did not report a video size, so nothing was "
                        "recorded. Reconnect the scope, then try again."));
         return;
     }
+    // Latch the orientation for the whole take, and open the encoder at the
+    // size those frames will actually have. A quarter turn swaps the axes:
+    // a 640x480 sensor recorded at 90 degrees is a 480x640 file.
+    m_recordingOrientation = m_orientation;
+    const QSize size = m_recordingOrientation.transformedSize(rawSize);
+
     const QString path = reserveName(QStringLiteral("mp4"));
     // A detach, error, or stall from a *previous* recording may still be
     // waiting on an outcome here (the finished()/failed() handler that would

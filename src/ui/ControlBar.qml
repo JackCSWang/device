@@ -50,9 +50,77 @@ Pane {
             onClicked: AppContext.changeScope()
         }
 
+        // Zoom was always implemented (wheel and pinch), but a technician
+        // holding the scope in one hand has neither a scroll wheel they can
+        // reach nor a second finger free. These are that same zoom.
+        Button {
+            text: qsTr("\u2212")                 // minus sign, not a hyphen
+            Layout.preferredHeight: 56
+            Layout.preferredWidth: 56
+            focusPolicy: Qt.NoFocus
+            enabled: AppContext.transform.zoom > 1.0
+            onClicked: AppContext.transform.zoomByCentered(1 / 1.25)
+            ToolTip.visible: hovered
+            ToolTip.text: qsTr("Zoom out")
+        }
+
         Label {
             text: qsTr("%1x").arg(AppContext.transform.zoom.toFixed(1))
             font.pixelSize: 18
+        }
+
+        Button {
+            text: qsTr("+")
+            Layout.preferredHeight: 56
+            Layout.preferredWidth: 56
+            focusPolicy: Qt.NoFocus
+            enabled: AppContext.transform.zoom < 8.0
+            onClicked: AppContext.transform.zoomByCentered(1.25)
+            ToolTip.visible: hovered
+            ToolTip.text: qsTr("Zoom in")
+        }
+
+        // Orientation. Unlike zoom, these ARE baked into snapshots and
+        // recordings (spec 9, revision 3), because a quarter turn and a
+        // mirror discard no pixels. They go dead during a recording: the
+        // encoder's frame size is fixed for the take.
+        Button {
+            text: qsTr("\u21BA")                 // anticlockwise open circle arrow
+            Layout.preferredHeight: 56
+            Layout.preferredWidth: 56
+            focusPolicy: Qt.NoFocus
+            enabled: !AppContext.orientation.locked
+            onClicked: AppContext.orientation.rotateCounterClockwise()
+            ToolTip.visible: hovered
+            ToolTip.text: AppContext.orientation.locked
+                          ? qsTr("Cannot rotate while recording")
+                          : qsTr("Rotate left")
+        }
+
+        Button {
+            text: qsTr("\u21BB")                 // clockwise open circle arrow
+            Layout.preferredHeight: 56
+            Layout.preferredWidth: 56
+            focusPolicy: Qt.NoFocus
+            enabled: !AppContext.orientation.locked
+            onClicked: AppContext.orientation.rotateClockwise()
+            ToolTip.visible: hovered
+            ToolTip.text: AppContext.orientation.locked
+                          ? qsTr("Cannot rotate while recording")
+                          : qsTr("Rotate right")
+        }
+
+        Button {
+            text: qsTr("Mirror")
+            Layout.preferredHeight: 56
+            focusPolicy: Qt.NoFocus
+            enabled: !AppContext.orientation.locked
+            highlighted: AppContext.orientation.mirrored
+            onClicked: AppContext.orientation.toggleMirror()
+            ToolTip.visible: hovered
+            ToolTip.text: AppContext.orientation.locked
+                          ? qsTr("Cannot mirror while recording")
+                          : qsTr("Flip left-to-right")
         }
 
         Button {

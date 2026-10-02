@@ -1,6 +1,7 @@
 #pragma once
 #include "core/ICaptureSource.h"
 #include "storage/DiskPolicy.h"
+#include "view/Orientation.h"
 #include <QObject>
 #include <QSet>
 #include <QString>
@@ -34,6 +35,12 @@ public:
     void stopRecording();
 
     bool isRecording() const;
+
+    // The live orientation: affects the view and every snapshot taken from
+    // now on. Recordings do NOT follow it mid-take -- see
+    // m_recordingOrientation.
+    void setOrientation(const Orientation& orientation);
+    Orientation orientation() const { return m_orientation; }
     QVideoSink* displaySink() const { return m_displaySink; }
 
     // Test seam for the frame path's free-space reading. Spec 10.3's "stop
@@ -97,6 +104,20 @@ private:
     SnapshotWriter* m_writer;
     QVideoSink* m_displaySink;
     QString m_outputDir;
+
+    // Live orientation, applied to the view and to snapshots.
+    Orientation m_orientation;
+    // Latched from m_orientation when a recording starts, and used for every
+    // frame of that take plus the size passed to IRecorder::start().
+    //
+    // This is a safety net, not a convenience: the encoder is opened once at
+    // a fixed frame size, so a quarter turn mid-take would start feeding it
+    // 480x640 frames after it was opened at 640x480 -- a corrupt or failed
+    // recording, which for inspection evidence is the worst outcome this
+    // project has. The UI also disables the orientation controls while
+    // recording, but that is UX; this latch is what makes the corruption
+    // unreachable even if the UI gating is ever broken or bypassed.
+    Orientation m_recordingOrientation;
 
     // The frame path's free-space reading. User actions (takeSnapshot,
     // startRecording) deliberately still use DiskPolicy::freeBytesFor()

@@ -5,6 +5,10 @@
 **Revision 2 (2026-09-30):** Android dropped. Targets are Windows, macOS, and
 Linux only. This removed the project's dominant technical risk; §5, §6, §7,
 §10, and §12 changed materially. Revision 1 history is preserved in §16.
+**Revision 3 (2026-10-02):** View controls added. A snapshot keyboard shortcut
+(Space), on-screen zoom buttons, and mirror/rotation. Orientation is the first
+transform that IS applied to saved files; §9 now distinguishes it from zoom
+and says why.
 
 ## 1. Purpose
 
@@ -304,7 +308,9 @@ fast, which for inspection evidence would be actively misleading.
 6. **Detach:** stop capture, finalize any recording, return to "connect a
    scope"
 
-## 9. Zoom
+## 9. Zoom and orientation
+
+### 9.1 Zoom
 
 Zoom is **view-only**. Every snapshot and every recording contains the full
 sensor frame at full resolution, regardless of zoom or pan state.
@@ -321,6 +327,49 @@ frame data is touched.
 - **Reset-to-fit control required.** It is easy to get lost at 8x, and
   hunting for the sample is the kind of friction that makes a tool unpopular
 - Bilinear filtering by default
+- **On-screen zoom buttons required** (revision 3). Wheel and pinch both
+  assume an input the operator may not have: a technician bracing the scope
+  against a sample one-handed has no free second finger and often no mouse.
+  The buttons zoom about the centre of the viewport, since a button has no
+  pointer position to zoom about.
+
+### 9.2 Orientation (revision 3)
+
+Orientation is rotation in 90-degree steps plus an optional horizontal
+mirror. Unlike zoom, orientation **is applied to saved snapshots and
+recordings** as well as to the live view.
+
+The distinction is not arbitrary. Zoom crops, so baking it in would destroy
+the full-sensor-frame guarantee of §7.2. A quarter turn or a mirror is a
+pixel permutation: a 640x480 frame rotated 90 degrees is the same 307200
+pixels arranged 480x640, nothing resampled and nothing discarded. The
+full-frame guarantee therefore survives, and the operator gets evidence
+oriented the way they actually observed it instead of sideways files that
+someone has to re-rotate in another tool later.
+
+- **Order is fixed: mirror first, then rotate.** The two orders differ for
+  every rotation except 180. The live view and the file writers must agree
+  exactly, so a single function owns the pixel order and every path calls it
+- Quarter turns only. Free-angle rotation would resample (blurring evidence),
+  leave empty corners, and serve no inspection purpose
+- **The axis swap propagates.** On a quarter turn the recorder is opened at
+  the rotated size, and the view's fit-and-pan arithmetic is given the
+  rotated frame size. A rotated view computed against the unrotated aspect
+  letterboxes against the wrong axis and refuses to pan where picture remains
+- **Orientation is locked while a recording is in flight.** The encoder's
+  frame size is fixed when the take opens, so a rotation mid-recording would
+  feed it frames of the wrong size and produce a truncated or unplayable
+  file. The controls grey out, and the capture path independently latches the
+  orientation at record start so the corruption stays unreachable even if the
+  UI gating is bypassed
+- **Orientation survives a pipeline rebuild.** A reopen (device change,
+  recovery, replug) constructs a fresh controller, which must inherit the
+  current orientation. Silently reverting to upright on reconnect would
+  produce evidence inconsistent with everything captured before it, with
+  nothing on screen to explain the change
+- Changing orientation resets the view to fit, because zoom and pan are
+  expressed in the old axes
+
 
 ## 10. Failure handling
 
@@ -458,3 +507,29 @@ that the four-platform argument no longer applies (§5.3); `ICaptureSource`
 was re-justified on testability alone (§7.3); and the project's risk profile
 shifted from one schedule-invalidating unknown to three manageable
 operational items (§6).
+
+**Revision 3 (2026-10-02).** View controls added after field use. Three
+changes, all additive:
+
+1. **Snapshot on Space.** The on-screen button was the only way to capture,
+   which does not survive one-handed operation. Space is gated on the same
+   condition as the button, and does not auto-repeat (a held key would write
+   one JPEG per repeat). Incidentally this makes a USB footswitch or
+   presenter remote work with no further code, since those enumerate as HID
+   keyboards.
+2. **On-screen zoom buttons** (§9.1). Zoom itself already existed via wheel
+   and pinch; what was missing was a control reachable without a mouse or a
+   second finger.
+3. **Mirror and rotation** (§9.2). The first transform this project applies
+   to saved files. It required amending §9's blanket "view-only" rule into a
+   distinction with a reason: zoom crops and so cannot be baked in;
+   orientation permutes pixels losslessly and so can.
+
+Why the scope's own side button is NOT used: the microscope on the
+development machine (`VID_05E3&PID_F12A`) presents a single UVC function and
+no HID interface, so its button cannot be seen through Qt Multimedia at all.
+Reaching it would need platform-specific code per OS — Windows KS events,
+Linux `uvcvideo`'s input device (which needs a udev rule, i.e. root, against
+§4's zero-admin requirement), and nothing public on macOS. A keyboard
+shortcut plus an off-the-shelf HID footswitch covers the same need on all
+three platforms with no platform code.

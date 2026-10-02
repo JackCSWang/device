@@ -32,3 +32,9 @@ void ViewTransformModel::panBy(qreal dx, qreal dy) {
     m_t.panBy({dx, dy}); emit changed();
 }
 void ViewTransformModel::resetToFit() { m_t.resetToFit(); emit changed(); }
+
+void ViewTransformModel::zoomByCentered(qreal factor) {
+    const QSizeF vp = m_t.viewportSize();
+    m_t.zoomAt(factor, {vp.width() / 2.0, vp.height() / 2.0});
+    emit changed();
+}

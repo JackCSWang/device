@@ -41,7 +41,7 @@ public:
         m_recording = true;
         return true;
     }
-    void feed(const QVideoFrame&, qint64) override {}
+    void feed(const QVideoFrame& frame, qint64) override { fedSizes << frame.size(); }
     void finalizeAndStop() override { m_recording = false; ++finalizeCalls; }
     bool isRecording() const override { return m_recording; }
 
@@ -56,6 +56,10 @@ public:
 
     int finalizeCalls = 0;
     QSize startedSize;
+    // Sizes of the frames actually handed to the encoder. The orientation
+    // tests below turn on the difference between what start() was told and
+    // what feed() then receives.
+    QList<QSize> fedSizes;
 
 private:
     bool m_recording = false;
@@ -586,6 +590,85 @@ private slots:
 
         QVERIFY(c.isRecording());
         QCOMPARE(rec.startedSize, QSize(640, 480));
+    }
+
+    // A quarter turn swaps the axes, so the encoder must be OPENED at the
+    // rotated size and then fed frames that match it. Asserting both halves
+    // matters: opening at the right size while feeding the wrong one (or the
+    // reverse) is exactly the mismatch that produces a corrupt take, and
+    // either half alone would pass while the file was unplayable.
+    void recordingOpensTheEncoderAtTheRotatedSizeAndFeedsItMatchingFrames() {
+        FakeCaptureSource src; src.setFrameSize({640, 480});
+        ScriptedRecorder rec; SnapshotWriter writer;
+        CaptureController c(&src, &rec, &writer, m_dir.path());
+
+        Orientation turned;
+        turned.rotateClockwise();
+        c.setOrientation(turned);
+
+        c.begin();
+        src.emitOneFrame();
+        c.startRecording();
+
+        QVERIFY(c.isRecording());
+        QCOMPARE(rec.startedSize, QSize(480, 640));
+
+        src.emitOneFrame();
+        QVERIFY(!rec.fedSizes.isEmpty());
+        QCOMPARE(rec.fedSizes.last(), QSize(480, 640));
+    }
+
+    // THE LATCH. IRecorder::start() fixes the frame size for the whole take,
+    // so a rotation pressed mid-recording must not reach the frames being
+    // fed to an encoder that is already open. The live orientation still
+    // changes -- the view and later snapshots follow it immediately -- but
+    // this take keeps the geometry it was opened with.
+    //
+    // Without the latch this test sees 480x640 arriving at an encoder opened
+    // at 640x480: a truncated or unplayable MP4, which for inspection
+    // evidence is the worst outcome this project has.
+    void orientationChangedMidRecordingDoesNotChangeTheTakeInFlight() {
+        FakeCaptureSource src; src.setFrameSize({640, 480});
+        ScriptedRecorder rec; SnapshotWriter writer;
+        CaptureController c(&src, &rec, &writer, m_dir.path());
+
+        c.begin();
+        src.emitOneFrame();
+        c.startRecording();
+        QCOMPARE(rec.startedSize, QSize(640, 480));
+
+        src.emitOneFrame();
+        QCOMPARE(rec.fedSizes.last(), QSize(640, 480));
+
+        Orientation turned;
+        turned.rotateClockwise();
+        c.setOrientation(turned);
+        src.emitOneFrame();
+
+        // The take is unchanged...
+        QCOMPARE(rec.fedSizes.last(), QSize(640, 480));
+        // ...while the live orientation did move on.
+        QCOMPARE(c.orientation().degrees(), 90);
+    }
+
+    // The ordinary un-rotated path must stay exactly as it was: identity
+    // orientation feeds the ORIGINAL frame through, with no copy and no
+    // re-encode. If this ever regressed into always round-tripping through
+    // QImage, every recording on every machine would pay for a feature
+    // almost nobody turns on.
+    void identityOrientationLeavesTheRecordingPathUntouched() {
+        FakeCaptureSource src; src.setFrameSize({640, 480});
+        ScriptedRecorder rec; SnapshotWriter writer;
+        CaptureController c(&src, &rec, &writer, m_dir.path());
+
+        c.begin();
+        src.emitOneFrame();
+        c.startRecording();
+        src.emitOneFrame();
+
+        QVERIFY(c.orientation().isIdentity());
+        QCOMPARE(rec.startedSize, QSize(640, 480));
+        QCOMPARE(rec.fedSizes.last(), QSize(640, 480));
     }
 
     // Must-fix minor 12: "Storage is nearly full. Stopping and saving the

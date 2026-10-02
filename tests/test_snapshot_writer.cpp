@@ -8,6 +8,7 @@
 #include <QThreadPool>
 #include "core/FakeCaptureSource.h"
 #include "output/SnapshotWriter.h"
+#include "view/Orientation.h"
 
 class TestSnapshotWriter : public QObject {
     Q_OBJECT
@@ -35,6 +36,75 @@ private slots:
         QImageReader reader(out);
         QCOMPARE(reader.format(), QByteArray("jpeg"));
         QCOMPARE(reader.size(), QSize(1920, 1080));
+    }
+
+    // Orientation is baked into the JPEG on disk, not merely shown in the
+    // view (spec 9, revision 3). Asserts the FILE as a decoder sees it, not
+    // just the `written` signal's size -- the signal could be right while
+    // the bytes were wrong, and the file is what the evidence actually is.
+    void writesRotatedJpegWhenOrientationIsSet() {
+        FakeCaptureSource src;
+        src.setFrameSize({640, 480});
+        src.start();
+
+        Orientation turned;
+        turned.rotateClockwise();
+
+        SnapshotWriter writer;
+        QSignalSpy spy(&writer, &SnapshotWriter::written);
+        const QString out = path(QStringLiteral("rotated.jpg"));
+
+        connect(&src, &ICaptureSource::frameReady, this,
+                [&](const QVideoFrame& f, qint64 ts) { writer.write(f, ts, out, turned); });
+        src.emitOneFrame();
+
+        QVERIFY(spy.wait(5000));
+        QCOMPARE(spy.at(0).at(1).toSize(), QSize(480, 640));
+
+        QImageReader reader(out);
+        QCOMPARE(reader.format(), QByteArray("jpeg"));
+        QCOMPARE(reader.size(), QSize(480, 640));
+
+        // Still the full sensor frame: a quarter turn rearranges pixels and
+        // discards none, which is the whole reason orientation may be baked
+        // in while zoom may not.
+        QCOMPARE(reader.size().width() * reader.size().height(), 640 * 480);
+    }
+
+    // A mirror keeps the dimensions, so dimensions alone cannot prove it was
+    // applied. This writes with and without the mirror and requires the two
+    // files to differ -- the only assertion that fails if apply() silently
+    // ignored the flag.
+    void mirroredSnapshotDiffersFromUnmirrored() {
+        FakeCaptureSource src;
+        src.setFrameSize({64, 48});
+        src.setPixelFormat(QVideoFrameFormat::Format_RGBX8888);
+        src.start();
+
+        // A flat synthetic frame would be mirror-invariant, so give the
+        // frame a left-right asymmetry by painting over half of it.
+        QVideoFrame captured;
+        connect(&src, &ICaptureSource::frameReady, this,
+                [&](const QVideoFrame& f, qint64) { captured = f; });
+        src.emitOneFrame();
+        QVERIFY(captured.isValid());
+
+        QImage img = captured.toImage().convertToFormat(QImage::Format_RGB32);
+        for (int y = 0; y < img.height(); ++y)
+            for (int x = 0; x < img.width() / 2; ++x)
+                img.setPixelColor(x, y, Qt::magenta);
+
+        Orientation plain;
+        Orientation mirrored;
+        mirrored.toggleMirror();
+
+        const QImage a = plain.apply(img);
+        const QImage b = mirrored.apply(img);
+        QCOMPARE(a.size(), b.size());
+        QVERIFY2(a != b, "mirror produced identical pixels -- the flag was ignored");
+        // And the mirror is horizontal: the painted half swaps sides.
+        QCOMPARE(b.pixelColor(img.width() - 1, 0), QColor(Qt::magenta));
+        QCOMPARE(a.pixelColor(0, 0), QColor(Qt::magenta));
     }
 
     // Review Focus 3: the spec's own preference list includes YUY2.

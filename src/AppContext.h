@@ -9,8 +9,10 @@
 // AppContext.cpp's includes), or Qt 6.8's automatic metatype table
 // generation fails to compile -- so these two, unlike the pImpl-only members
 // below, need real includes rather than forward declarations.
+#include <QSizeF>
 #include <QVideoSink>
 #include "view/ViewTransformModel.h"
+#include "view/OrientationModel.h"
 
 class CaptureSession;
 class DeviceRegistry;
@@ -30,6 +32,7 @@ class AppContext : public QObject {
     QML_ELEMENT
     QML_SINGLETON
     Q_PROPERTY(ViewTransformModel* transform READ transform CONSTANT)
+    Q_PROPERTY(OrientationModel* orientation READ orientation CONSTANT)
     // Current device/pipeline state. Replaced by each new device-state
     // message, so a transient error does not sit over a healthy pipeline
     // forever.
@@ -62,6 +65,7 @@ public:
     ~AppContext() override;
 
     ViewTransformModel* transform() const { return m_transform; }
+    OrientationModel* orientation() const { return m_orientation; }
     QString statusText() const;
     QString lastOutcomeText() const;
     bool recording() const;
@@ -111,6 +115,11 @@ signals:
 private:
     DeviceRegistry* m_registry = nullptr;
     ViewTransformModel* m_transform = nullptr;
+    OrientationModel* m_orientation = nullptr;
+    // The sensor's own frame size, before orientation. Kept so a rotation
+    // can recompute what the view should fit without waiting for the next
+    // frame to arrive -- which on a stalled or detached scope never comes.
+    QSizeF m_rawFrameSize;
     std::unique_ptr<CaptureSession> m_session;
     QMetaObject::Connection m_videoRelay;
     QString m_outputDir;

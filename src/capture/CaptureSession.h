@@ -1,6 +1,7 @@
 #pragma once
 #include "core/ICaptureSource.h"
 #include "device/IDeviceRegistry.h"
+#include "view/Orientation.h"
 #include <QObject>
 #include <QSize>
 #include <QString>
@@ -86,6 +87,14 @@ public:
     QString rememberedDeviceId() const { return m_rememberedId; }
     void setRememberedDeviceId(const QString& id) { m_rememberedId = id; }
 
+    // Held here, not only on the controller, because the controller is
+    // destroyed and recreated on every reopen (device change, recovery,
+    // reconnect). Without session-level ownership the operator's rotation
+    // would silently reset to upright the moment the scope was replugged --
+    // and they would not necessarily notice before capturing evidence.
+    void setOrientation(const Orientation& orientation);
+    Orientation orientation() const { return m_orientation; }
+
     void takeSnapshot();
     void toggleRecording();
     // Index into deviceDescriptions(). Opens that device and remembers it.
@@ -149,6 +158,7 @@ private:
     std::unique_ptr<IRecorder> m_recorder;
     std::unique_ptr<ICaptureSource> m_source;
     std::unique_ptr<CaptureController> m_controller;
+    Orientation m_orientation;
 
     QList<ScopeDevice> m_devices;
     QString m_openDeviceId;

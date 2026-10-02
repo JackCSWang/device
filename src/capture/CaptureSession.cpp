@@ -171,6 +171,13 @@ void CaptureSession::openDevice(const ScopeDevice& device) {
     m_controller = std::make_unique<CaptureController>(
         m_source.get(), m_recorder.get(), m_writer, m_outputDir);
 
+    // Carry the operator's orientation onto the fresh controller. A reopen
+    // (device change, recovery, replug) builds a new one, and without this
+    // line the rotation would silently revert to upright -- producing
+    // evidence oriented differently from every file captured before the
+    // reconnect, with nothing on screen to explain it.
+    m_controller->setOrientation(m_orientation);
+
     m_openDeviceId = device.id;
     m_everOpenedADevice = true;
     m_sawFrame = false;
@@ -407,4 +414,10 @@ void CaptureSession::teardownForChangeScope() {
     emit deviceListChanged();
     setNeedsChoice(true);
     m_status->setDeviceStatus(tr("Select a scope."));
+}
+
+void CaptureSession::setOrientation(const Orientation& orientation) {
+    m_orientation = orientation;
+    if (m_controller)
+        m_controller->setOrientation(orientation);
 }

@@ -366,6 +366,61 @@ the camera" alongside the real cause rather than asserting a denial. Do not
 treat a *false positive* on a busy device as a release blocker; do treat a
 missing button on a genuine denial as one.
 
+### 16. Snapshot shortcut, including a held key (revision 3)
+
+Press Space once with the scope live: exactly one new `.jpg`. Then **hold
+Space for about three seconds**: still **exactly one** new file.
+
+The held-key half is the point. `Shortcut.autoRepeat` defaults to true in Qt,
+and a held key would otherwise write one JPEG per repeat — filling the output
+folder with near-identical frames and burning the free-space margin
+`DiskPolicy` defends. A unit test pins the property, but only a real key-hold
+proves the platform honours it.
+
+Also: with the scope unplugged, Space must do nothing at all — no file, no
+error banner.
+
+### 17. Orientation reaches the saved files (revision 3)
+
+Rotate the view 90 degrees, then capture both a snapshot and a short
+recording.
+
+**Expected:** the JPEG is 480x640 (not 640x480) on the development scope, and
+the MP4 plays back rotated the same way the view showed it. Open both in
+something other than this app — a rotation that only exists in our own
+viewport is the failure this scenario exists to catch.
+
+Then set a mirror and take a second snapshot: it must differ from the
+unmirrored one in the same orientation, flipped left-to-right.
+
+**Expected pixel count is unchanged:** 480x640 is still the full sensor
+frame. If a rotated snapshot ever comes back cropped, that is a release
+blocker — it breaks §7.2.
+
+### 18. Orientation is locked during a recording (revision 3)
+
+Start a recording, then try both rotate buttons and Mirror.
+
+**Expected:** all three are greyed out and do nothing, with a tooltip saying
+why. Stop the recording; they become available again immediately.
+
+**Then the real check:** confirm the recording you just made is playable and
+has consistent orientation throughout. The encoder's frame size is fixed when
+the take opens, so a rotation that leaked through mid-recording would produce
+a truncated or unplayable file — the exact failure class this project exists
+to prevent. The capture path latches the orientation independently of the UI
+gating, so this should hold even if the buttons were somehow clicked.
+
+### 19. Orientation survives a replug (revision 3)
+
+Rotate 90 degrees, then unplug the scope and plug it back in.
+
+**Expected:** once the live view returns, it is still rotated 90 degrees, and
+a snapshot taken now matches the ones taken before the replug. A reopen
+builds a fresh capture controller; silently reverting to upright would mean
+evidence from after the reconnect disagrees with evidence from before it,
+with nothing on screen to explain why.
+
 ## Known hardware facts
 
 Record these against every matrix run, because they change what a pass
