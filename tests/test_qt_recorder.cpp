@@ -80,6 +80,43 @@ private slots:
         rec.finalizeAndStop();
     }
 
+    // Record pressed again straight after Stop. isRecording() is already
+    // false while the muxer is still closing the first file, but start()
+    // replaces the QMediaRecorder doing that -- destroying it mid-finalize,
+    // which can leave a file with no moov atom (spec 10.1). start() must
+    // refuse until the first take's outcome has arrived, and that take must
+    // still be saved and playable.
+    void startWhileTheLastTakeIsFinalizingIsRefused() {
+        FakeCaptureSource src;
+        src.setFrameSize({640, 480});
+        src.start();
+
+        QtRecorder rec;
+        const QString first = m_dir.filePath(QStringLiteral("first.mp4"));
+        QSignalSpy done(&rec, &IRecorder::finished);
+        QSignalSpy bad(&rec, &IRecorder::failed);
+
+        QVERIFY(rec.start(first, {640, 480}, 30.0));
+        connect(&src, &ICaptureSource::frameReady, &rec,
+                [&](const QVideoFrame& f, qint64 ts) { rec.feed(f, ts); });
+        for (int i = 0; i < 45; ++i) { src.emitOneFrame(); QTest::qWait(16); }
+
+        rec.finalizeAndStop();
+        QVERIFY2(done.isEmpty() && bad.isEmpty(),
+                 "outcome arrived synchronously; this backend has no window to test");
+        QVERIFY(!rec.start(m_dir.filePath(QStringLiteral("second.mp4")), {640, 480}, 30.0));
+
+        QVERIFY(done.wait(15000));
+        QCOMPARE(done.at(0).at(0).toString(), first);
+        QCOMPARE(bad.count(), 0);
+        QVERIFY(durationOf(first) > 300);
+
+        // Once the outcome is in, recording again works as normal.
+        QVERIFY(rec.start(m_dir.filePath(QStringLiteral("third.mp4")), {640, 480}, 30.0));
+        rec.finalizeAndStop();
+        QVERIFY(done.wait(15000) || bad.count() > 0);
+    }
+
     void usesFrameTimestampsAsPts() {
         FakeCaptureSource src;
         src.setFrameSize({320, 240});

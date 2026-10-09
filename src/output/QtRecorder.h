@@ -23,6 +23,11 @@ private:
     std::unique_ptr<QVideoFrameInput> m_input;
     QString m_path;
     bool m_recording = false;
+    // True from finalizeAndStop() until the QMediaRecorder reaches
+    // StoppedState. isRecording() is already false by then, but the muxer
+    // is still writing the file, and start() would destroy the recorder
+    // doing it. start() refuses while this is set.
+    bool m_finalizing = false;
     bool m_errored = false;
     qint64 m_firstPtsUs = -1;
     qint64 m_lastPtsUs = -1;

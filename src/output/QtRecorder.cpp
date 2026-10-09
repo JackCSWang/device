@@ -6,7 +6,7 @@
 QtRecorder::QtRecorder(QObject* parent) : IRecorder(parent) {}
 
 bool QtRecorder::start(const QString& path, const QSize& size, qreal frameRate) {
-    if (m_recording) return false;
+    if (m_recording || m_finalizing) return false;
 
     m_session  = std::make_unique<QMediaCaptureSession>();
     m_recorder = std::make_unique<QMediaRecorder>();
@@ -96,11 +96,18 @@ void QtRecorder::feed(const QVideoFrame& frame, qint64 ptsUs) {
 void QtRecorder::finalizeAndStop() {
     if (!m_recording) return;
     m_recording = false;
-    if (m_recorder) m_recorder->stop();
+    if (!m_recorder) return;
+    m_recorder->stop();
+    // A recorder that never got going (an error at record() time) is
+    // already stopped and will report no further state change, so there is
+    // no window to wait out. Read after stop(), which may also have reached
+    // StoppedState synchronously.
+    m_finalizing = m_recorder->recorderState() != QMediaRecorder::StoppedState;
 }
 
 void QtRecorder::onRecorderStateChanged(QMediaRecorder::RecorderState state) {
     if (state != QMediaRecorder::StoppedState) return;
+    m_finalizing = false;
 
     // errorOccurred already emitted failed() with m_path for this recording.
     // Emitting finished() as well would tell a consumer -- most critically

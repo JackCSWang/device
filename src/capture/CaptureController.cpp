@@ -287,6 +287,15 @@ void CaptureController::setOrientation(const Orientation& orientation) {
 
 void CaptureController::startRecording() {
     if (isRecording()) return;
+    // The previous take's file is still being closed. QtRecorder refuses
+    // start() in this window anyway (restarting would destroy the recorder
+    // mid-finalize); this is here so the technician hears that the last take
+    // is fine and what to do, not a bare "could not start".
+    if (m_awaitingOutcome) {
+        emit status(tr("The last recording is still being saved. "
+                       "Press Record again in a moment."));
+        return;
+    }
     // Must-fix minor 9: mirror takeSnapshot()'s own guard. Without it,
     // pressing Record before the first frame started a recorder against a
     // fabricated 1920x1080 resolution for what might be a 640x480 sensor

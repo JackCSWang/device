@@ -38,6 +38,7 @@ class ScriptedRecorder : public IRecorder {
 public:
     bool start(const QString&, const QSize& size, qreal) override {
         startedSize = size;
+        ++startCalls;
         m_recording = true;
         return true;
     }
@@ -55,6 +56,7 @@ public:
     }
 
     int finalizeCalls = 0;
+    int startCalls = 0;
     QSize startedSize;
     // Sizes of the frames actually handed to the encoder. The orientation
     // tests below turn on the difference between what start() was told and
@@ -410,47 +412,68 @@ private slots:
         QVERIFY(msgs.last().at(0).toString().contains(QStringLiteral("take.mp4")));
     }
 
+    // Record pressed while the previous take is still being written. The
+    // recorder refuses (see test_qt_recorder), but the technician must be
+    // told why in words that say the first take is fine and what to do --
+    // not "Could not start recording", which reads as a fault.
+    void recordWhileThePreviousTakeIsSavingSaysSo() {
+        FakeCaptureSource src; src.setFrameSize({640, 480});
+        ScriptedRecorder rec; SnapshotWriter writer;
+        CaptureController c(&src, &rec, &writer, m_dir.path());
+
+        QSignalSpy msgs(&c, &CaptureController::status);
+
+        c.begin();
+        src.emitOneFrame();
+        c.startRecording();
+        c.stopRecording();           // outcome not resolved yet
+        c.startRecording();
+
+        QCOMPARE(rec.startCalls, 1);
+        QVERIFY(msgs.last().at(0).toString().contains(QStringLiteral("still being saved")));
+
+        rec.simulateFinished(m_dir.filePath(QStringLiteral("take.mp4")));
+        c.startRecording();
+        QCOMPARE(rec.startCalls, 2);
+    }
+
     // New Important B (2nd review round): m_pendingInterruption must not
-    // survive past the recording it was set for. ScriptedRecorder's
-    // finalizeAndStop() deliberately does not resolve the outcome on its
-    // own, holding the "still pending" window open long enough to prove
-    // startRecording() clears it for the next, unrelated recording.
-    void startRecordingClearsAStrandedInterruptionFlag() {
+    // survive past the recording it was set for. Originally this started a
+    // second recording while the first one's detach outcome was still
+    // pending and checked the stale Detach flag did not hijack it. Record is
+    // now refused in that window (the recorder would otherwise be destroyed
+    // mid-finalize), so the stale flag cannot meet a new take at all; what
+    // this pins instead is that the refused Record leaves the pending report
+    // intact, and the detach is still told, naming the file. (startRecording
+    // still resets the flag, as defense in depth.)
+    void recordDuringAPendingDetachOutcomeIsRefusedAndTheDetachIsStillReported() {
         FakeCaptureSource src; src.setFrameSize({640, 480});
         ScriptedRecorder rec; SnapshotWriter writer;
         CaptureController c(&src, &rec, &writer, m_dir.path());
 
         QSignalSpy lost(&c, &CaptureController::sourceLost);
-        QSignalSpy savedRec(&c, &CaptureController::recordingSaved);
-        QSignalSpy msgs(&c, &CaptureController::status);
 
         c.begin();
         src.emitOneFrame();          // Record is gated on the first frame
         c.startRecording();
         src.emitOneFrame();
         src.injectDetach();
-        // wasRecording was true, so onSourceStopped set
-        // m_pendingInterruption to Detach and called finalizeAndStop() --
-        // whose outcome, by this double's design, never arrives on its
-        // own. The message is deferred, waiting.
+        // The outcome, by this double's design, never arrives on its own.
         QCOMPARE(lost.count(), 0);
         QVERIFY(!c.isRecording());
 
-        // Reconnect and start a second, completely unrelated recording.
         c.begin();
         src.emitOneFrame();          // begin() resets the first-frame gate
         c.startRecording();
-        const QString newPath = m_dir.filePath(QStringLiteral("healthy-take.mp4"));
-        rec.simulateFinished(newPath);
+        QCOMPARE(rec.startCalls, 1);
 
-        // This recording's own completion must be reported plainly, not
-        // hijacked by the stale Detach flag from the earlier, already-gone
-        // recording.
-        QCOMPARE(savedRec.count(), 1);
-        QCOMPARE(savedRec.at(0).at(0).toString(), newPath);
-        QCOMPARE(lost.count(), 0);
-        for (const auto& call : msgs)
-            QVERIFY(!call.at(0).toString().contains(QStringLiteral("disconnected")));
+        const QString path = m_dir.filePath(QStringLiteral("cut-short.mp4"));
+        rec.simulateFinished(path);
+
+        QCOMPARE(lost.count(), 1);
+        const QString message = lost.at(0).at(0).toString();
+        QVERIFY(message.contains(QStringLiteral("disconnected")));
+        QVERIFY(message.contains(QStringLiteral("cut-short.mp4")));
     }
 
     // Review round 3, Critical C1: a real consumer's sourceLost handler may
