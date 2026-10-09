@@ -377,6 +377,39 @@ private slots:
             QVERIFY(!call.at(0).toString().contains(QStringLiteral("was saved as")));
     }
 
+    // A detach in the window between pressing Stop and the muxer finishing.
+    // QtRecorder's isRecording() goes false the moment finalizeAndStop() is
+    // requested, so onSourceStopped used to treat this as "nothing was being
+    // recorded" and emit sourceLost at once -- and CaptureSession's teardown
+    // then disconnected the recorder before its outcome arrived, so the
+    // "saved as" message was silently lost. sourceLost must wait for the
+    // outcome, exactly as it does for a detach mid-take.
+    void detachWhileAStopIsFinalizingStillNamesTheSavedFile() {
+        FakeCaptureSource src; src.setFrameSize({640, 480});
+        ScriptedRecorder rec; SnapshotWriter writer;
+        CaptureController c(&src, &rec, &writer, m_dir.path());
+
+        QSignalSpy lost(&c, &CaptureController::sourceLost);
+        QSignalSpy msgs(&c, &CaptureController::status);
+
+        c.begin();
+        src.emitOneFrame();
+        c.startRecording();
+        src.emitOneFrame();
+        c.stopRecording();           // outcome not resolved yet: the window
+        QVERIFY(!c.isRecording());
+
+        src.injectDetach();
+        QCOMPARE(lost.count(), 0);   // deferred, not "nothing was being recorded"
+
+        const QString path = m_dir.filePath(QStringLiteral("take.mp4"));
+        rec.simulateFinished(path);
+
+        QCOMPARE(lost.count(), 1);
+        QVERIFY(lost.at(0).at(0).toString().contains(QStringLiteral("take.mp4")));
+        QVERIFY(msgs.last().at(0).toString().contains(QStringLiteral("take.mp4")));
+    }
+
     // New Important B (2nd review round): m_pendingInterruption must not
     // survive past the recording it was set for. ScriptedRecorder's
     // finalizeAndStop() deliberately does not resolve the outcome on its

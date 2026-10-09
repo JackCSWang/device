@@ -93,6 +93,11 @@ private:
     void onFrame(const QVideoFrame& frame, qint64 timestampUs);
     void onSourceStopped(StopReason reason, const QString& detail);
     QString reserveName(const QString& extension) const;
+    // Every finalize this controller requests goes through here, so
+    // m_awaitingOutcome cannot miss one. Like m_recorder->finalizeAndStop()
+    // itself, it can reach finished()/failed() synchronously, and so may
+    // destroy `this` before it returns.
+    void finalizeRecording();
 
     // Spec 10.3's Linux `EACCES` row: the literal `usermod -aG video` fix,
     // named for the device node the scope actually enumerated as. Empty
@@ -149,6 +154,15 @@ private:
     // same way m_pendingInterruption is. Empty (and unused) for Stall/None.
     // Cleared alongside m_pendingInterruption -- see both reset sites.
     QString m_pendingInterruptionDetail;
+
+    // True from the moment this controller asks the recorder to finalize
+    // until that recording's finished()/failed() arrives. isRecording()
+    // cannot answer this: QtRecorder reports false as soon as the finalize
+    // is requested, while the muxer is still closing the file. A detach in
+    // that window must still defer sourceLost until the outcome is known,
+    // or CaptureSession's teardown disconnects the recorder first and the
+    // "saved as" message is lost. Set only by finalizeRecording().
+    bool m_awaitingOutcome = false;
 
     // Names handed out by reserveName() but not yet necessarily written to
     // disk: SnapshotWriter::write() queues the actual encode on a thread

@@ -52,6 +52,7 @@ CaptureController::CaptureController(ICaptureSource* source, IRecorder* recorder
 
     connect(m_recorder, &IRecorder::finished, this,
             [this](const QString& path, qint64) {
+                m_awaitingOutcome = false;
                 emit recordingSaved(path);
                 // The outcome is now known, so this is the first point at
                 // which a detach-, error-, or stall-interrupted recording
@@ -93,6 +94,7 @@ CaptureController::CaptureController(ICaptureSource* source, IRecorder* recorder
             });
     connect(m_recorder, &IRecorder::failed, this,
             [this](const QString&, const QString& why) {
+                m_awaitingOutcome = false;
                 if (m_pendingInterruption == RecordingInterruption::Detach ||
                     m_pendingInterruption == RecordingInterruption::Error) {
                     const bool wasDetach = m_pendingInterruption == RecordingInterruption::Detach;
@@ -251,7 +253,7 @@ void CaptureController::onFrame(const QVideoFrame& frame, qint64 timestampUs) {
             // sayable. Nothing is announced here, so the technician gets
             // exactly one message and it names the file and the action.
             m_pendingInterruption = RecordingInterruption::DiskFull;
-            m_recorder->finalizeAndStop();
+            finalizeRecording();
         } else {
             // m_recordingOrientation, NOT m_orientation: the encoder was
             // opened at the latched orientation's frame size and every
@@ -342,6 +344,13 @@ void CaptureController::startRecording() {
 
 void CaptureController::stopRecording() {
     if (!isRecording()) return;
+    finalizeRecording();
+}
+
+void CaptureController::finalizeRecording() {
+    // Set before the call, which can reach the outcome handler -- the one
+    // place that clears it -- synchronously.
+    m_awaitingOutcome = true;
     m_recorder->finalizeAndStop();
 }
 
@@ -353,6 +362,10 @@ void CaptureController::onSourceStopped(StopReason reason, const QString& detail
     m_snapshotArmed = false;
 
     const bool wasRecording = isRecording();
+    // A finalize already requested (Stop pressed, or storage ran low) whose
+    // outcome has not arrived yet is, for reporting purposes, still a
+    // recording in flight: the detach message has to wait for it too.
+    const bool outcomePending = wasRecording || m_awaitingOutcome;
     const bool stallInitiated = m_stallStopping;
     m_stallStopping = false;
 
@@ -362,7 +375,7 @@ void CaptureController::onSourceStopped(StopReason reason, const QString& detail
     // guarantees otherwise -- so whether it succeeded is not yet known here.
     // Record *why* the recording was cut short and let the finished()/
     // failed() handler report the outcome once it actually is known.
-    if (wasRecording) {
+    if (outcomePending) {
         if (reason == StopReason::Detached || reason == StopReason::Error) {
             m_pendingInterruption = (reason == StopReason::Detached)
                 ? RecordingInterruption::Detach : RecordingInterruption::Error;
@@ -371,7 +384,7 @@ void CaptureController::onSourceStopped(StopReason reason, const QString& detail
             // once this function returns (spec 10.3; task-15-report.md
             // Important 2 -- previously discarded entirely for this path).
             m_pendingInterruptionDetail = detail;
-        } else if (stallInitiated) {
+        } else if (stallInitiated && wasRecording) {
             m_pendingInterruption = RecordingInterruption::Stall;
         }
         // finalizeAndStop() can synchronously drive the recorder all the way
@@ -380,7 +393,11 @@ void CaptureController::onSourceStopped(StopReason reason, const QString& detail
         // this controller before this call even returns. `this` must not be
         // touched again on this path; the destructor already ran by the
         // time control gets back here if that happened.
-        m_recorder->finalizeAndStop();
+        //
+        // Already finalizing (outcomePending without wasRecording): nothing
+        // to request, only the outcome to wait for.
+        if (wasRecording)
+            finalizeRecording();
         return;
     }
 
