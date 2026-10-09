@@ -353,8 +353,9 @@ void CaptureSession::retry() {
 }
 
 void CaptureSession::changeScope() {
-    if (m_controller && m_controller->isRecording()) {
-        // A recording is in flight. It must be finalized -- and its outcome
+    if (m_controller && (m_controller->isRecording() || m_controller->isSavingRecording())) {
+        // A recording is in flight, or Stop was pressed and its file is still
+        // being closed. It must be finalized -- and its outcome
         // reported -- before anything is disconnected or destroyed;
         // otherwise the recorder is orphaned mid-finalize, risking a
         // truncated MP4 with no moov atom (spec 10.1: "the evidence is
@@ -369,6 +370,9 @@ void CaptureSession::changeScope() {
         // recordingSaved/status connections openDevice() already wired up.
         // finishChangeScope() is connected *after* those, so it always
         // runs once the outcome has already reached the status model.
+        //
+        // If the take is already saving, stopRecording() is a no-op and
+        // only the wait for its outcome remains.
         if (!m_changeScopePending) {
             m_changeScopePending = true;
             connect(m_recorder.get(), &IRecorder::finished, this, &CaptureSession::finishChangeScope);

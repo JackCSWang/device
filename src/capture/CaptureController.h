@@ -35,6 +35,11 @@ public:
     void stopRecording();
 
     bool isRecording() const;
+    // A take this controller has asked to finalize whose finished()/failed()
+    // has not arrived yet. isRecording() is already false by then; anything
+    // that tears the pipeline down must wait for this too, or the outcome
+    // message is lost with the disconnected recorder.
+    bool isSavingRecording() const { return m_awaitingOutcome; }
 
     // The live orientation: affects the view and every snapshot taken from
     // now on. Recordings do NOT follow it mid-take -- see

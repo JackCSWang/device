@@ -518,6 +518,34 @@ private slots:
         QVERIFY(h->session->needsDeviceChoice());
     }
 
+    // Stop pressed, then Change scope before the file has finished saving.
+    // isRecording() is already false, so changeScope() used to tear down at
+    // once -- disconnecting the recorder before its outcome arrived, so the
+    // "Last saved" line never appeared for a take that did save.
+    void changeScopeWhileAStopIsFinalizingWaitsForTheOutcome() {
+        auto h = makeHarness();
+        h->registry.attach(QStringLiteral("scope-1"), QStringLiteral("HD camera"));
+        h->session->start();
+        h->source()->emitOneFrame();
+
+        h->session->toggleRecording();
+        h->source()->emitOneFrame();
+        const QString path = h->recorder()->path();
+        h->session->toggleRecording();          // Stop: outcome not in yet
+        QVERIFY(!h->session->isRecording());
+
+        h->session->changeScope();
+        QVERIFY(h->session->hasDevice());
+        QVERIFY(!h->session->needsDeviceChoice());
+
+        h->recorder()->resolveFinished();
+
+        QCOMPARE(h->session->status()->lastOutcome(),
+                 QStringLiteral("Last saved: %1").arg(QFileInfo(path).fileName()));
+        QVERIFY(!h->session->hasDevice());
+        QVERIFY(h->session->needsDeviceChoice());
+    }
+
     // The device line must not be a write-once field: a transient error
     // followed by a healthy pipeline has to clear.
     void aTransientErrorDoesNotPersistOverAHealthyPipeline() {
