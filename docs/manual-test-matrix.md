@@ -421,6 +421,30 @@ builds a fresh capture controller; silently reverting to upright would mean
 evidence from after the reconnect disagrees with evidence from before it,
 with nothing on screen to explain why.
 
+### 20. Record and Change scope straight after Stop
+
+Record for about 10 seconds, press **Stop recording**, and immediately look
+at the button.
+
+**Expected:** it reads "Saving…" and is greyed out until the "Recording saved
+as …" message appears, then goes back to **Record**. On a fast machine the
+window may be too short to see; that is fine. Never acceptable: a second
+recording starting before the save message, or the first file failing to
+play.
+
+Repeat, but press **Change scope** right after Stop. **Expected:** the picker
+appears only after "Last saved: …" shows the take's name, and that file plays.
+
+### 21. Unplug straight after Stop
+
+Record for about 10 seconds, press **Stop recording**, and unplug the scope
+within a second.
+
+**Expected:** a message saying the scope was disconnected *and* naming the
+saved file, and that file plays. Before this was fixed, the disconnect was
+announced at once and the "saved as" message for the take was lost. The window
+is short, so try it a few times; log any run where the file is not named.
+
 ## Known hardware facts
 
 Record these against every matrix run, because they change what a pass
