@@ -44,6 +44,8 @@ class AppContext : public QObject {
     // detected" (spec 10.1).
     Q_PROPERTY(QString lastOutcomeText READ lastOutcomeText NOTIFY lastOutcomeTextChanged)
     Q_PROPERTY(bool recording READ recording NOTIFY recordingChanged)
+    // The last take is still being written; Record is refused until it is.
+    Q_PROPERTY(bool savingRecording READ savingRecording NOTIFY recordingChanged)
     Q_PROPERTY(bool hasDevice READ hasDevice NOTIFY pipelineChanged)
     // True once frames are actually arriving. Recording is gated on this,
     // not merely on a device being open: a take started before the first
@@ -69,6 +71,7 @@ public:
     QString statusText() const;
     QString lastOutcomeText() const;
     bool recording() const;
+    bool savingRecording() const;
     bool hasDevice() const;
     bool hasVideo() const;
     bool cameraAccessDenied() const;

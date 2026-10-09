@@ -60,6 +60,10 @@ bool CaptureSession::isRecording() const {
     return m_controller && m_controller->isRecording();
 }
 
+bool CaptureSession::isSavingRecording() const {
+    return m_controller && m_controller->isSavingRecording();
+}
+
 QVideoSink* CaptureSession::displaySink() const {
     return m_controller ? m_controller->displaySink() : nullptr;
 }

@@ -92,6 +92,7 @@ AppContext::~AppContext() = default;
 QString AppContext::statusText() const { return m_session->status()->deviceStatus(); }
 QString AppContext::lastOutcomeText() const { return m_session->status()->lastOutcome(); }
 bool AppContext::recording() const { return m_session->isRecording(); }
+bool AppContext::savingRecording() const { return m_session->isSavingRecording(); }
 bool AppContext::hasDevice() const { return m_session->hasDevice(); }
 bool AppContext::hasVideo() const { return m_session->hasVideo(); }
 bool AppContext::cameraAccessDenied() const { return m_session->cameraAccessDenied(); }

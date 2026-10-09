@@ -546,6 +546,30 @@ private slots:
         QVERIFY(h->session->needsDeviceChoice());
     }
 
+    // The Record button is greyed out while the last take is still being
+    // saved (the controller would refuse it anyway). That needs a state
+    // QML can bind to, announced on recordingChanged at both edges: when
+    // Stop is pressed, and when the outcome arrives.
+    void savingStateCoversTheWindowFromStopToOutcome() {
+        auto h = makeHarness();
+        h->registry.attach(QStringLiteral("scope-1"), QStringLiteral("HD camera"));
+        h->session->start();
+        h->source()->emitOneFrame();
+
+        h->session->toggleRecording();
+        h->source()->emitOneFrame();
+        QVERIFY(!h->session->isSavingRecording());
+
+        QSignalSpy changed(h->session.get(), &CaptureSession::recordingChanged);
+        h->session->toggleRecording();          // Stop
+        QVERIFY(h->session->isSavingRecording());
+        QCOMPARE(changed.count(), 1);
+
+        h->recorder()->resolveFinished();
+        QVERIFY(!h->session->isSavingRecording());
+        QCOMPARE(changed.count(), 2);
+    }
+
     // The device line must not be a write-once field: a transient error
     // followed by a healthy pipeline has to clear.
     void aTransientErrorDoesNotPersistOverAHealthyPipeline() {

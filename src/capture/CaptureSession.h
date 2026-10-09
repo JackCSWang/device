@@ -72,6 +72,9 @@ public:
     // fabricated resolution and a take that cannot contain anything.
     bool hasVideo() const { return m_sawFrame; }
     bool isRecording() const;
+    // Stop was pressed and the file is still being closed. Announced on
+    // recordingChanged at both edges (Stop, and the outcome arriving).
+    bool isSavingRecording() const;
     bool cameraAccessDenied() const { return m_cameraAccessDenied; }
     // True when more than one video input is present and none has been
     // chosen yet (spec 8.5 step 1: "auto-open if exactly one scope,

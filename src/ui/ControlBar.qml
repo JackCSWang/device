@@ -20,14 +20,19 @@ Pane {
         }
 
         Button {
-            text: AppContext.recording ? qsTr("Stop recording") : qsTr("Record")
+            text: AppContext.recording ? qsTr("Stop recording")
+                : AppContext.savingRecording ? qsTr("Saving…") : qsTr("Record")
             // Must-fix minor 9: hasVideo, not hasDevice. A recording
             // started before the first frame has no real resolution to
             // encode at and cannot contain anything;
             // CaptureController::startRecording() refuses it, and the
             // button should not invite it. Snapshot stays on hasDevice so
             // its own "no video yet" message is still reachable.
-            enabled: AppContext.hasVideo
+            //
+            // Also dead while the last take is still being saved: starting
+            // again then would destroy the recorder closing that file, so
+            // the controller refuses it, and the button should not offer it.
+            enabled: AppContext.hasVideo && !AppContext.savingRecording
             Layout.preferredHeight: 56
             focusPolicy: Qt.NoFocus   // Space belongs to the snapshot shortcut
             highlighted: AppContext.recording
