@@ -392,21 +392,150 @@ looks like on the hardware actually available:
   rotation was available. If one becomes available, scenario 8 should be
   re-run against it specifically and the result logged here regardless of
   outcome.
-- **macOS and Linux have never been built or tested**, on any hardware, as
-  of Task 13 — this development machine has no toolchain for either
-  platform (see `packaging/macos/build-app.sh` and
-  `packaging/linux/build-appimage.sh`, both written to spec and unverified).
-  Every row in this document, Part A and Part B alike, must be run fresh
-  the first time either platform is built, with no assumption carried over
-  from the Windows results.
+- **macOS has never been built or tested**, on any hardware — this
+  development machine has no macOS toolchain (see
+  `packaging/macos/build-app.sh`, written to spec and unverified). Every row
+  in this document, Part A and Part B alike, must be run fresh the first
+  time it is built, with no assumption carried over from the Windows
+  results.
+- **Linux now builds and tests natively**, as of 2026-10-10 (Arch Linux,
+  Qt 6.8, GCC). This supersedes the earlier note that this machine had no
+  Linux toolchain. A clean out-of-tree Release configure and build succeeds,
+  and all 18 `ctest` targets pass. What this does *not* cover: every Part A
+  row still needs real microscope hardware on Linux and remains unrun. Only
+  the hardware-independent behaviour is green.
+- **`packaging/linux/build-appimage.sh` is verified through AppDir staging
+  and blocked at `linuxdeploy`**, as of 2026-10-10. Verified by running the
+  script and then replicating its stages individually:
+  - *Icon guard* — **verified in both directions.** With
+    `packaging/linux/microscope.png` absent the script exits 1 with its
+    intended message before running any CMake; with the icon present it
+    proceeds. An icon now ships in the repo (see below), so the absent case
+    was verified before it landed.
+  - *Configure and build at `-DCMAKE_INSTALL_PREFIX=/usr` (lines 21-22)* —
+    **verified.** Clean build succeeds in a separate build tree.
+  - *`DESTDIR=AppDir cmake --install` (line 26)* — **verified, and this was
+    the stage most at risk.** The script's own comment warns that without an
+    `install()` rule this exits 0 and silently stages nothing. It does not:
+    it produces `AppDir/usr/bin/microscope` and
+    `AppDir/usr/share/applications/microscope.desktop`, and sets the
+    binary's RUNPATH to `$ORIGIN:$ORIGIN/../lib` — the layout and runpath an
+    AppImage needs for bundled Qt to resolve. `src/CMakeLists.txt`'s
+    conditional `if(EXISTS ... microscope.png)` icon rule is also exercised:
+    the real icon stages to
+    `AppDir/usr/share/icons/hicolor/256x256/apps/microscope.png` as intended.
+  - *Build-tree isolation* — **verified.** The script now defaults `$BUILD`
+    to `build-appimage` rather than `build`. Confirmed that a bare invocation
+    leaves `build/`'s `CMAKE_INSTALL_PREFIX` at `~/.local`; before the fix it
+    would have silently rewritten it to `/usr`, pointing a developer's plain
+    `cmake --install build` at a path needing sudo.
+  - *`linuxdeploy --plugin qt --output appimage`* — **now run for the first
+    time. It produces an AppImage, and that AppImage is NOT yet shippable.**
+    `linuxdeploy` and `linuxdeploy-plugin-qt` were installed as upstream
+    release AppImages into `~/.local/bin` (no sudo, not from the AUR; they
+    are not in the Arch repos). Running the script surfaced three distinct
+    defects, two now fixed in the script itself:
+    1. **`strip` failure — fixed.** linuxdeploy bundles a `strip` older than
+       the toolchain here; it cannot parse the `.relr.dyn` section modern
+       linkers emit (`unknown type [0x13]`) and the qt plugin aborted. The
+       script now exports `NO_STRIP=1`.
+    2. **No QML modules bundled — fixed.** Without `QML_SOURCES_PATHS` the qt
+       plugin has nothing to scan and bundles *zero* QML modules. The build
+       still succeeded and the AppImage still launched, then died with
+       `module "QtQuick.Controls" is not installed` — this app's own QML is
+       compiled in as `qrc:` while Qt's modules are not. The script now
+       exports `QML_SOURCES_PATHS`. Verified: `AppDir/usr/qml` now holds
+       QtQuick, QtQml, QtMultimedia and QML.
+    3. **Qt Multimedia backend segfault — root cause isolated, not yet
+       fixed in the script.** With the above fixed, the AppImage starts and
+       loads its QML, then **segfaults inside the dynamic loader during
+       `dlopen`** of the ffmpeg media backend, reached from `VideoOutput` in
+       `ui/VideoView.qml`.
+       Isolated by controlled removal from an extracted AppImage, testing one
+       hypothesis at a time:
+       - Removing the bundled GTK/pango cluster (`libpango*`, `libcairo`,
+         `librsvg`, `libglycin-2`, `libthai`, `libdatrie`, `libseccomp`,
+         `libgdk_pixbuf`) — **still crashed.** Not the cause.
+       - Removing the bundled hwaccel shims (`libva*`, `libvdpau`) — **still
+         crashed.** Not the cause.
+       - Removing the five bundled ffmpeg libraries (`libavcodec.so.63`,
+         `libavformat.so.63`, `libavutil.so.61`, `libswresample.so.7`,
+         `libswscale.so.10`) so that subgraph resolves from the host —
+         **survives, loads QML, no multimedia errors.** Restoring the GTK
+         cluster while leaving ffmpeg excluded still works, which pins the
+         cause to the bundled ffmpeg stack alone.
+       **Do not simply add `--exclude-library libav*` to the script.** It
+       fixes this machine by making the AppImage depend on a host
+       `libavcodec.so.63` (ffmpeg 9.x). Ubuntu 24.04 LTS ships
+       `libavcodec.so.60`. That trades a loud crash here for a silent
+       no-video in the field, which is worse.
+- **An AppImage built on this machine cannot run on a technician's machine,
+  ffmpeg crash or not** (2026-10-10). The build host is Arch with **glibc
+  2.44**; an AppImage inherits that as a floor, and Ubuntu 24.04 LTS ships
+  glibc 2.39. AppImages are meant to be built against the *oldest* target
+  base, which is also what would avoid the bleeding-edge ffmpeg conflict
+  above. The real fix for both problems is to build
+  `packaging/linux/build-appimage.sh` inside an old-base container (Docker is
+  installed on this machine; Ubuntu 22.04 would be a reasonable base) rather
+  than on the Arch host. Until that is proven, **treat the Linux AppImage as
+  unreleasable** — what the host path produces runs only on a machine as new
+  as this one, and even then only with ffmpeg excluded.
+- **A containerised build path now exists but has never been run**
+  (2026-10-10). `packaging/linux/build-appimage-docker.sh` +
+  `packaging/linux/Dockerfile.appimage` build on Ubuntu 22.04 (glibc 2.35)
+  against the official Qt 6.8 binaries, and reuse `build-appimage.sh` inside
+  the container so the two paths cannot drift. Verified without running it:
+  the daemon-missing guard fires with the right instructions, and every Qt
+  input resolves against Qt's own servers — version 6.8.3 exists, the arch id
+  is `linux_gcc_64`, the `qtmultimedia`/`qtshadertools`/`qtimageformats`
+  modules exist, and the base install carries `qtdeclarative` (for the
+  `Quick`/`Qml` components this project requires) and `qtwayland`. Not
+  verified: anything requiring the build to actually execute. Docker is
+  installed here but its daemon is inactive and the user is not in the
+  `docker` group, both of which need root. The script takes a `DOCKER`
+  override (`DOCKER="sudo docker" ...`) so the permanent group grant can be
+  skipped in favour of a one-off sudo; starting the daemon is unavoidable
+  either way. **Expected to also fix the
+  xcb-only finding above** from the container side too, since `qtwayland`
+  ships in the Qt base install and the script now stages the QPA plugin
+  explicitly — confirm on first run rather than assuming it.
+    Also found, and since addressed in the script: **only the `xcb` platform
+    plugin was bundled.** On a Wayland session without XWayland the AppImage
+    aborted on startup in `createEventDispatcher()` with "no Qt platform
+    plugin could be initialized ... Available platform plugins are: xcb" —
+    `linuxdeploy-plugin-qt` bundles `libQt6WaylandClient.so.6` but never the
+    `platforms/libqwayland*.so` QPA plugin it exists to serve. The script now
+    stages the QPA plugin and the `wayland-shell-integration` /
+    `-graphics-integration-client` / `-decoration-client` helpers in a second
+    `--deploy-deps-only` pass, and asserts the plugin is present in the packed
+    AppDir so it cannot silently regress. It only ever bit when
+    `QT_QPA_PLATFORM` named wayland alone; a desktop setting the usual
+    `wayland;xcb` fallback (Omarchy does) landed on xcb under XWayland, which
+    is why it shipped unnoticed. `desktop-file-validate` passes.
+    **Not verified here:** that the finished AppImage actually starts on a
+    Wayland-only session. Confirm that on the first container build.
+- **The app icon is in place, and is a design decision that can be revisited**
+  (2026-10-10). `packaging/linux/microscope.svg` is the editable master;
+  `packaging/linux/microscope.png` (256x256 RGBA) is generated from it with
+  `rsvg-convert` — edit the SVG and regenerate, never hand-edit the PNG. The
+  mark is an abstract lens/reticle with a specimen dot, in the app's own dark
+  palette, chosen over a literal microscope silhouette because a silhouette's
+  thin arm and stage blur below ~32px. **Checked at 256, 48, 32 and 16px: it
+  is crisp at 256/48/32, but soft at 16px** — the ring and the teal dot still
+  read, the reticle ticks do not. If 16px matters on a target desktop, ship a
+  simplified dedicated 16px variant rather than downscaling this one; that
+  needs a new `install()` rule, as `src/CMakeLists.txt` currently installs the
+  256x256 size only.
 - **The Linux permission check now uses the device's real node.**
   `CaptureController::permissionHintForError()` asks the source for
   `deviceNode()` (on V4L2, `QCameraDevice::id()` *is* the `/dev/videoN`
   path) instead of hardcoding `/dev/video0`, and it runs on the
   `StopReason::Error` path rather than on `!start()`, which activation's
   asynchrony made unreachable. Still note which node the scope enumerated
-  as (`v4l2-ctl --list-devices`) on every Linux run — this code has never
-  been executed on Linux, because no Linux toolchain exists on the
-  development machine. The decision itself is unit-tested on Windows
+  as (`v4l2-ctl --list-devices`) on every Linux run — this code has still
+  never been executed against a real device. A Linux toolchain now exists
+  (see above), so the blocker is no longer the build: it is that no
+  microscope and no permission-denied device node have been available to
+  exercise it. The decision itself is unit-tested on Windows
   (`StopClassification::isDeviceNodePermissionProblem`); only the
   `QFileInfo` stat around it is unverified.

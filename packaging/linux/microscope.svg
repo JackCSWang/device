@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- App icon master. packaging/linux/microscope.png is generated from this:
+       rsvg-convert -w 256 -h 256 microscope.svg -o microscope.png
+     Edit this file, never the PNG. Palette matches the app's own dark UI
+     (ui/VideoView.qml: #101014 ground, #f0f0f0 foreground).
+
+     An abstract lens/reticle rather than a microscope silhouette: a literal
+     silhouette's thin arm and stage turn to mush below ~32px, which is the
+     size that actually matters in a taskbar. A thick ring plus one bright
+     specimen dot stays readable at 16px. -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256">
+  <defs>
+    <linearGradient id="ground" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#1b1b23"/>
+      <stop offset="1" stop-color="#0e0e12"/>
+    </linearGradient>
+  </defs>
+
+  <!-- tile -->
+  <rect x="8" y="8" width="240" height="240" rx="54" fill="url(#ground)"/>
+
+  <!-- field of view, then the lens barrel over its edge -->
+  <circle cx="128" cy="128" r="82" fill="#212129"/>
+  <circle cx="128" cy="128" r="88" fill="none" stroke="#e9e9f0" stroke-width="14"/>
+
+  <!-- reticle: four ticks with a clear centre, so the dots stay the focus -->
+  <g stroke="#7a8090" stroke-width="7" stroke-linecap="round">
+    <line x1="128" y1="58"  x2="128" y2="92"/>
+    <line x1="128" y1="164" x2="128" y2="198"/>
+    <line x1="58"  y1="128" x2="92"  y2="128"/>
+    <line x1="164" y1="128" x2="198" y2="128"/>
+  </g>
+
+  <!-- specimen in view: the one spot of colour, and the 16px legibility cue -->
+  <circle cx="150" cy="104" r="15" fill="#4fd6c6"/>
+  <circle cx="110" cy="148" r="9"  fill="#35a89d"/>
+</svg>

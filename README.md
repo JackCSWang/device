@@ -67,10 +67,56 @@ packaging/linux/build-appimage.sh     # -> Microscope-x86_64.AppImage
 The Windows script has been built and run end-to-end on this project's
 MinGW toolchain, including confirming the MinGW runtime (`libstdc++-6.dll`,
 `libgcc_s_seh-1.dll`, `libwinpthread-1.dll`) is bundled so the portable
-folder runs on a machine with no MinGW or Qt installed. The macOS and Linux
-scripts are written to spec but **unverified** — this development machine
-has neither toolchain. Run them for the first time with extra scrutiny, and
-update `docs/manual-test-matrix.md` with the results.
+folder runs on a machine with no MinGW or Qt installed.
+
+The **macOS** script is written to spec but **unverified** — this
+development machine has no macOS toolchain. Run it for the first time with
+extra scrutiny, and update `docs/manual-test-matrix.md` with the results.
+
+The **Linux** script now **runs end to end and produces
+`Microscope-x86_64.AppImage` (~96 MB), but that AppImage is not yet
+shippable.** Two independent blockers:
+
+1. It starts and loads its QML, then segfaults in the dynamic loader while
+   `dlopen`-ing the Qt Multimedia ffmpeg backend — it dies at the moment it
+   would show video. Isolated to the five bundled ffmpeg libraries; drop
+   them and it runs clean.
+2. Built on an Arch host it inherits **glibc 2.44** as a floor, so it will
+   not start on any older distro (Ubuntu 24.04 LTS ships 2.39).
+
+Building inside an old-base container is the standard AppImage practice and
+addresses both at once:
+
+```bash
+packaging/linux/build-appimage-docker.sh    # -> Microscope-x86_64.AppImage
+```
+
+That path (`packaging/linux/Dockerfile.appimage`) builds on Ubuntu 22.04
+(glibc 2.35) with the official Qt 6.8 binaries, which ship their own FFmpeg
+rather than bundling the host's. It reuses `build-appimage.sh` inside the
+container so both paths share the same fixes. **It has been written and its
+inputs verified — Qt 6.8.3 / `linux_gcc_64` / the `qtmultimedia`,
+`qtshadertools`, `qtimageformats` modules all resolve against Qt's servers,
+and `qtdeclarative` plus `qtwayland` are in the base install — but it has
+never been run**, because the Docker daemon on this machine is inactive and
+needs `sudo systemctl start docker` first. After that it can be run either
+unprivileged (requires `sudo usermod -aG docker "$USER"` and a re-login) or,
+without that permanent group grant, as
+`DOCKER="sudo docker" packaging/linux/build-appimage-docker.sh`. Two other defects found on the first real run are already fixed
+in the script (`NO_STRIP=1` for a `.relr.dyn` strip failure, and
+`QML_SOURCES_PATHS`, without which *no* QML modules were bundled at all).
+The script also stages Qt's Wayland QPA plugin and its shell-integration
+helpers itself, in a second pass — `linuxdeploy-plugin-qt` bundles
+`libQt6WaylandClient.so.6` but not the `platforms/libqwayland*.so` that
+library serves, so without this the AppImage aborted on a Wayland-only
+session. The script needs `linuxdeploy` and
+`linuxdeploy-plugin-qt` on PATH — upstream release AppImages in
+`~/.local/bin` work and need no sudo. See `docs/manual-test-matrix.md`.
+
+The app icon lives at `packaging/linux/microscope.svg` (editable master) and
+`packaging/linux/microscope.png` (256x256, generated). Edit the SVG and
+regenerate with the `rsvg-convert` line in its header; never edit the PNG by
+hand.
 
 ## Running tests
 

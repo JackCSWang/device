@@ -4,3 +4,4 @@ dist/
 AppDir/
 *.user
 .DS_Store
+*.AppImage
